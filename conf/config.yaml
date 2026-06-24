@@ -68,6 +68,12 @@ wandb:
     - ogbl-ddi
     - strategy1-feature-bootstrapping
 
+# ── Centralized baseline mode ──────────────────────────────────────────────
+# use_fixed_features=false → Mode A: learned nn.Embedding (default)
+# use_fixed_features=true  → Mode B: same fixed features as main_fl.py
+baseline:
+  use_fixed_features: false
+
 # ── Misc ───────────────────────────────────────────────────────────────────
 device: cuda
 log_level: INFO
