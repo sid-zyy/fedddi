@@ -6,10 +6,35 @@ GraphSAGE encoder + NeuralLinkPredictor (Hadamard MLP decoder).
 
 Usage
 ─────
-  python train.py                                   # reads conf/config.yaml
-  python train.py model.hidden_dim=512              # override any param
-  python train.py training.num_runs=10              # 10 seeds for leaderboard
-  python train.py wandb.mode=disabled               # disable W&B
+  python train.py                                    # Mode A: learned embedding (default)
+  python train.py baseline.use_fixed_features=true   # Mode B: fixed features (matches FL)
+  python train.py model.hidden_dim=512               # override any param
+  python train.py training.num_runs=10               # 10 seeds for leaderboard
+  python train.py wandb.mode=disabled                # disable W&B
+
+Baseline modes
+──────────────
+  A) Learned embedding  (default, baseline.use_fixed_features=false)
+     Uses nn.Embedding(num_nodes, hidden_dim). Standard ogbl-ddi leaderboard
+     setup; cannot be directly federated (per-client embeddings live in
+     orthogonal spaces, so FedAvg aggregation is meaningless).
+
+  B) Fixed global features  (baseline.use_fixed_features=true)
+     Uses the SAME compute_fixed_global_features() call as main_fl.py
+     (Strategy 1): degree + BFS anchor distances + spectral eigenvectors,
+     projected via a shared Linear(feat_dim → hidden_dim). This is the
+     MATCHED CENTRALIZED BASELINE: comparing its Hits@20 against the
+     federated number isolates the true cost of federation.
+
+  Both modes evaluate using train edges only for message-passing (matching
+  ogbl-ddi leaderboard convention).
+
+Paper comparison table:
+  | Setting                         | Val Hits@20   |
+  |---------------------------------|---------------|
+  | Centralized — learned embedding |  TBD          |  (Mode A)
+  | Centralized — fixed features    |  TBD          |  (Mode B)
+  | Federated   — fixed features    |  TBD          |  (main_fl.py)
 
 Design
 ──────
@@ -25,12 +50,14 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, cast, List
 
+import torch
 import hydra
 import numpy as np
 import wandb
 from omegaconf import DictConfig, OmegaConf
 
 from src.data.dataset import load_dataset, get_edge_split
+from src.data.features import compute_fixed_global_features
 from src.models.encoder import GraphSAGEEncoder
 from src.models.predictor import NeuralLinkPredictor
 from src.training.trainer import Trainer
@@ -55,14 +82,42 @@ def main(cfg: DictConfig) -> None:
     edge_index = data.edge_index.to(device)
     num_nodes: int = data.num_nodes
 
+    # ── Node feature strategy ─────────────────────────────────────────────────
+    # baseline.use_fixed_features=true  →  Mode B: same fixed features as FL
+    # baseline.use_fixed_features=false →  Mode A: learned embedding (default)
+    baseline_cfg = cfg.get("baseline", {})
+    use_fixed_features: bool = bool(baseline_cfg.get("use_fixed_features", False))
 
-
-    # ── Load Node Features if configured ──────────────────────────────────────
     node_features = None
-    if cfg.dataset.get("use_features", False) and cfg.dataset.get("feature_types", []):
-        import os
-        import torch
 
+    if use_fixed_features:
+        # ── Mode B: fixed global features (matches main_fl.py Strategy 1) ────
+        feat_cfg = cfg.dataset.get("fixed_features", {})
+        num_anchors_feat  = int(feat_cfg.get("num_anchors",  64))
+        num_spectral_feat = int(feat_cfg.get("num_spectral", 32))
+
+        logger.info(
+            "Mode B (matched baseline): computing fixed global features "
+            "(anchors=%d, spectral=%d) — same as main_fl.py Strategy 1 ...",
+            num_anchors_feat, num_spectral_feat,
+        )
+        node_features = compute_fixed_global_features(
+            edge_index.cpu(),
+            num_nodes,
+            num_anchors=num_anchors_feat,
+            num_spectral=num_spectral_feat,
+            seed=cfg.training.seed,
+        )
+        logger.info(
+            "Fixed feature dimension: %d → projected to hidden_dim=%d",
+            node_features.shape[1], cfg.model.hidden_dim,
+        )
+        wandb_group = "centralized_fixed_features"
+        wandb_tags  = list(cfg.wandb.tags) + ["mode-b-fixed-features", "matched-baseline"]
+
+    elif cfg.dataset.get("use_features", False) and cfg.dataset.get("feature_types", []):
+        # ── Legacy path: pre-computed features from features.pt ──────────────
+        import os
         feat_path = os.path.join(cfg.dataset.root, "ogbl_ddi", "features.pt")
         if os.path.exists(feat_path):
             feats_dict = torch.load(feat_path, map_location="cpu", weights_only=True)
@@ -80,6 +135,18 @@ def main(cfg: DictConfig) -> None:
                 "Features requested but not found at %s. Please run prepare_features.py first.",
                 feat_path,
             )
+        wandb_group = "centralized_legacy_features"
+        wandb_tags  = list(cfg.wandb.tags) + ["legacy-features"]
+
+    else:
+        # ── Mode A: learned embedding (default) ───────────────────────────────
+        logger.info(
+            "Mode A (learned embedding): using nn.Embedding — "
+            "not directly comparable to the federated fixed-feature model. "
+            "Run with baseline.use_fixed_features=true for the matched baseline.",
+        )
+        wandb_group = "centralized_baseline"
+        wandb_tags  = list(cfg.wandb.tags)
 
     all_results: List[Dict[str, float]] = []
 
@@ -98,8 +165,8 @@ def main(cfg: DictConfig) -> None:
             entity=cfg.wandb.entity if cfg.wandb.entity else None,
             name=f"run_{run_id}",
             config=cast(Dict[str, Any], OmegaConf.to_container(cfg, resolve=True)),
-            tags=list(cfg.wandb.tags),
-            group="centralized_baseline",
+            tags=wandb_tags,
+            group=wandb_group,
             reinit=True,
             mode=cfg.wandb.mode,
         )
@@ -168,8 +235,8 @@ def main(cfg: DictConfig) -> None:
             entity=cfg.wandb.entity if cfg.wandb.entity else None,
             name="aggregate_summary",
             config=cast(Dict[str, Any], OmegaConf.to_container(cfg, resolve=True)),
-            tags=list(cfg.wandb.tags) + ["summary"],
-            group="centralized_baseline",
+            tags=wandb_tags + ["summary"],
+            group=wandb_group,
             reinit=True,
             mode=cfg.wandb.mode,
         )
