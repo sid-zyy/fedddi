@@ -1,36 +1,4 @@
-"""
-src/models/encoder.py  (Strategy 1 — Feature Bootstrapping)
-─────────────────────────────────────────────────────────────
-GraphSAGE encoder for ogbl-ddi.
-
-Architecture
-────────────
-  [Strategy 1]  fixed_features [N, feat_dim]
-       │
-  feature_proj Linear(feat_dim → hidden_dim)   ← THIS is now aggregated
-       │
-  SAGEConv(D, D) + ReLU + Dropout               → h^1  [N, D]
-       │
-  SAGEConv(D, D)                                 → h^L  [N, D]
-
-  [Legacy / ablation]  nn.Embedding(num_nodes, hidden_dim)  (private, local)
-
-Key change from the original:
-  • In the original code, node_features=None caused an nn.Embedding table that
-    was NEVER aggregated. The convs and MLP were aggregated, but each client's
-    embedding lived in its own private coordinate space — geometrically
-    orthogonal to every other client's. Aggregating convs on top of orthogonal
-    embeddings is equivalent to averaging random rotations: the result is not
-    a useful representation of anything.
-  • In Strategy 1, node_features is always provided (the public fixed global
-    features). The feature_proj Linear projects these into hidden_dim and IS
-    included in the aggregation parameter list. Because every client's
-    node_features are bit-for-bit identical (same topology, same seed), the
-    feature_proj lives in a shared Euclidean space from round 1, and FedAvg
-    correctly averages meaningful gradient directions.
-  • The nn.Embedding table is removed in this mode. No private parameters are
-    needed — the fixed features already supply every node's initial identity.
-"""
+"""GraphSAGE encoder for ogbl-ddi"""
 
 from __future__ import annotations
 
@@ -41,22 +9,7 @@ from torch_geometric.nn import SAGEConv  # type: ignore
 
 
 class GraphSAGEEncoder(nn.Module):
-    """GraphSAGE encoder.
-
-    Parameters
-    ----------
-    num_nodes:      int   — total node count (used for device/size checks).
-    hidden_dim:     int   — hidden & output embedding dimension (default 500).
-    num_layers:     int   — number of SAGEConv layers (default 2).
-    dropout:        float — dropout probability applied after each hidden layer.
-    normalize:      bool  — if True, L2-normalise the output embeddings.
-    node_features:  Tensor | None
-                    If provided (Strategy 1), these FIXED global features are
-                    registered as a non-parameter buffer and projected to
-                    hidden_dim via feature_proj — which IS aggregated by FedAvg.
-                    If None (legacy ablation), a learnable Embedding table is
-                    used instead — NOT recommended for federated training.
-    """
+    """GraphSAGE encoder"""
 
     def __init__(
         self,
@@ -76,31 +29,62 @@ class GraphSAGEEncoder(nn.Module):
         self.normalize = normalize
 
         if node_features is not None:
-            # ── Strategy 1: fixed public features ───────────────────────────
-            # Register as a buffer — moves to device automatically and is
-            # saved in state_dict for checkpoint compatibility, but is NOT
-            # a Parameter so it does not appear in optimizer updates or
-            # federated gradient aggregation.
-            self.register_buffer("node_features", node_features.float())
-            # feature_proj IS a Parameter: its weights reflect what the
-            # federation collectively learned about the feature-to-embedding
-            # mapping, and must be aggregated by FedAvg.
+
+
+
+
+
+            self.register_buffer("node_features", node_features.float().clone())
+
+
+
+
+            self.register_buffer("_base_node_features", node_features.float().clone())
+
+
+
             self.feature_proj = nn.Linear(node_features.shape[1], hidden_dim, bias=True)
             self.embedding = None
         else:
-            # ── Legacy / ablation: private learnable embedding ───────────────
-            # WARNING: in a federated setting this creates orthogonal client
-            # coordinate spaces. Only use for ablation studies.
+
+
+
             self.node_features = None  # type: ignore[assignment]
             self.feature_proj = None
             self.embedding = nn.Embedding(num_nodes, hidden_dim)
 
-        # ── SAGEConv stack ─────────────────────────────────────────────────
+
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             self.convs.append(SAGEConv(hidden_dim, hidden_dim))
 
+
+
+
+
+
+
+
+        self.use_dense_adj: bool = False
+        self._dense_adj_cache: tuple | None = None
+
         self._reset_parameters()
+
+    @staticmethod
+    def build_dense_mean_adj(edge_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
+        """Row-normalised dense adjacency A_hat[i, j] = (#edges j→i) / in_degree(i)"""
+        A = torch.zeros(num_nodes, num_nodes, device=edge_index.device, dtype=torch.float32)
+        A.index_put_((edge_index[1], edge_index[0]),
+                     torch.ones(edge_index.size(1), device=edge_index.device, dtype=torch.float32),
+                     accumulate=True)
+        deg = A.sum(dim=1, keepdim=True).clamp_(min=1.0)
+        return A / deg
+
+    def _get_dense_adj(self, edge_index: torch.Tensor) -> torch.Tensor:
+        key = (edge_index.data_ptr(), tuple(edge_index.shape), str(edge_index.device))
+        if self._dense_adj_cache is None or self._dense_adj_cache[0] != key:
+            self._dense_adj_cache = (key, self.build_dense_mean_adj(edge_index, self.num_nodes))
+        return self._dense_adj_cache[1]
 
     def _reset_parameters(self) -> None:
         if self.embedding is not None:
@@ -110,26 +94,23 @@ class GraphSAGEEncoder(nn.Module):
             nn.init.zeros_(self.feature_proj.bias)
 
     def forward(self, edge_index: torch.Tensor) -> torch.Tensor:
-        """Compute node embeddings via message passing over all nodes.
-
-        Parameters
-        ----------
-        edge_index : LongTensor [2, E]
-
-        Returns
-        -------
-        h : FloatTensor [num_nodes, hidden_dim]
-        """
+        """Compute node embeddings via message passing over all nodes"""
         if self.node_features is not None:
             assert self.feature_proj is not None
-            h = self.feature_proj(self.node_features)   # [N, D]
+            h = self.feature_proj(self.node_features)
         else:
             assert self.embedding is not None
             node_ids = torch.arange(self.num_nodes, device=edge_index.device)
-            h = self.embedding(node_ids)                # [N, D]
+            h = self.embedding(node_ids)
 
+        dense = self.use_dense_adj and all(hasattr(c, "lin_l") and hasattr(c, "lin_r") for c in self.convs)
+        A = self._get_dense_adj(edge_index) if dense else None
         for i, conv in enumerate(self.convs):
-            h = conv(h, edge_index)                     # [N, D]
+            if dense:
+
+                h = conv.lin_l(A @ h) + conv.lin_r(h)
+            else:
+                h = conv(h, edge_index)
             if i < self.num_layers - 1:
                 h = F.relu(h)
                 h = F.dropout(h, p=self.dropout, training=self.training)
@@ -137,9 +118,25 @@ class GraphSAGEEncoder(nn.Module):
         if self.normalize:
             h = F.normalize(h, p=2, dim=-1)
 
-        return h  # [N, D]
+        return h
 
     @property
     def uses_fixed_features(self) -> bool:
         """True when operating in Strategy-1 (Feature Bootstrapping) mode."""
         return self.node_features is not None
+
+    def set_feature_delta_(self, delta: torch.Tensor | None) -> None:
+        """Apply (or clear) a covariate-drift delta on THIS client's own copy of the fixed feature
+        matrix
+        """
+        if self.node_features is None:
+            raise RuntimeError(
+                "set_feature_delta_() requires fixed-feature mode "
+                "(this encoder was built with node_features=None)."
+            )
+        if delta is None:
+            self.node_features.data.copy_(self._base_node_features)
+        else:
+            self.node_features.data.copy_(
+                self._base_node_features + delta.to(self.node_features.device)
+            )

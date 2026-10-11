@@ -1,9 +1,4 @@
-# pyright: reportMissingParameterType=false, reportUnknownParameterType=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
-"""
-tests/test_predictor.py
-───────────────────────
-Tests for NeuralLinkPredictor (Hadamard MLP decoder).
-"""
+"""Tests for NeuralLinkPredictor (Hadamard MLP decoder)."""
 
 from __future__ import annotations
 
@@ -17,8 +12,8 @@ BATCH = 16
 
 @pytest.fixture
 def predictor():
-    # FIX (per NEXT_STEPS.md "Open technical debt"): seed before
-    # construction so Xavier-init weights are deterministic across runs.
+
+
     torch.manual_seed(0)
     return NeuralLinkPredictor(
         emb_dim=HIDDEN_DIM, hidden_dim=64, num_layers=3, dropout=0.0
@@ -27,9 +22,9 @@ def predictor():
 
 @pytest.fixture
 def rand_embeddings():
-    # Re-seed (same seed) so this fixture's randomness is also
-    # deterministic regardless of fixture instantiation order relative to
-    # `predictor` above.
+
+
+
     torch.manual_seed(1)
     h_u = torch.rand(BATCH, HIDDEN_DIM)
     h_v = torch.rand(BATCH, HIDDEN_DIM)
@@ -50,9 +45,9 @@ class TestNeuralLinkPredictor:
         assert out.dtype == torch.float32
 
     def test_logits_are_unbounded(self, predictor, rand_embeddings):
-        # Deterministic given the seeded `predictor`/`rand_embeddings`
-        # fixtures above (see their docstrings) — previously this could
-        # intermittently fail by chance on unseeded Xavier-init weights.
+
+
+
         h_u, h_v = rand_embeddings
         predictor.eval()
         out = predictor(h_u, h_v)

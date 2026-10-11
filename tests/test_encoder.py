@@ -1,17 +1,4 @@
-# pyright: reportMissingParameterType=false, reportUnknownParameterType=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
-"""
-tests/test_encoder.py
-─────────────────────
-Unit tests for GraphSAGEEncoder.
-
-Covers:
-  • Output shape and dtype
-  • L2 normalisation flag
-  • Embedding table is a trainable parameter
-  • Gradient flows end-to-end
-  • Reproducibility under fixed seeds
-  • Dropout is disabled in eval mode
-"""
+"""Unit tests for GraphSAGEEncoder"""
 
 from __future__ import annotations
 
@@ -58,7 +45,7 @@ class TestGraphSAGEEncoder:
         enc.eval()
         h = enc(edge_index)
         norms = h.norm(dim=-1)
-        # At least some norms should differ from 1.0
+
         assert not torch.allclose(norms, torch.ones(NUM_NODES), atol=1e-3)
 
     def test_embedding_is_parameter(self, encoder):
@@ -96,12 +83,12 @@ class TestGraphSAGEEncoder:
         h_eval_1 = encoder(edge_index).detach().clone()
         h_eval_2 = encoder(edge_index).detach().clone()
 
-        # eval should be deterministic
+
         torch.testing.assert_close(h_eval_1, h_eval_2)
-        # train may differ (dropout) — not guaranteed but very likely
-        # (soft check: at least one element differs)
-        # Note: if all dropout masks happen to be identical this could fail,
-        # but with p=0.3 and 50×16=800 elements it is astronomically unlikely.
+
+
+
+
         assert not torch.allclose(h_train_1, h_train_2, atol=1e-7)
 
     def test_reproducibility(self, edge_index):

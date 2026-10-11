@@ -17,7 +17,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # URL to dhimmel's drugbank tsv with atc codes
+
     url = (
         "https://raw.githubusercontent.com/dhimmel/drugbank/gh-pages/data/drugbank.tsv"
     )
@@ -26,9 +26,9 @@ def main():
         df = pd.read_csv(url, sep="\t")
     except Exception as e:
         logger.error(f"Failed to download or parse TSV: {e}")
-        return
+        raise SystemExit(1)
 
-    # Extract Level-1 ATC codes (first character). If multiple, take the first valid one.
+
     def extract_level1(atc_str: Any) -> str | None:
         if pd.isna(atc_str) or not isinstance(atc_str, str):
             return None
@@ -45,19 +45,24 @@ def main():
         .to_dict()
     )
 
-    # Load node mapping
+
     mapping_path = os.path.join(
         args.data_dir, "ogbl_ddi", "mapping", "nodeidx2drugid.csv.gz"
     )
     if not os.path.exists(mapping_path):
-        logger.error(f"Mapping file not found at {mapping_path}")
-        return
+        logger.error(
+            f"Mapping file not found at {mapping_path}. "
+            "The ogbl-ddi dataset needs to be downloaded first "
+            "(e.g. `from src.data.dataset import load_dataset; load_dataset(root=%r)`) "
+            "before this script can build the ATC mapping." % args.data_dir
+        )
+        raise SystemExit(1)
     mapping_df = pd.read_csv(mapping_path)
 
     num_nodes = mapping_df["node idx"].max() + 1
 
-    # 14 Valid Level-1 ATC Codes: A, B, C, D, G, H, J, L, M, N, P, R, S, V
-    # Let's map them to indices 0..13. 'UNKNOWN' mapped to 14.
+
+
     valid_codes = ["A", "B", "C", "D", "G", "H", "J", "L", "M", "N", "P", "R", "S", "V"]
     code_to_idx = {code: i for i, code in enumerate(valid_codes)}
     UNKNOWN_IDX = len(valid_codes)
@@ -65,7 +70,7 @@ def main():
     atc_indices: list[int] = []
     missing = 0
     for idx in range(num_nodes):
-        # find drugbank id
+
         rows = mapping_df[mapping_df["node idx"] == idx]
         if len(rows) > 0:
             drug_id = rows.iloc[0]["drug id"]

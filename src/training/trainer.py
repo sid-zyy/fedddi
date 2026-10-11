@@ -1,26 +1,11 @@
-"""
-src/training/trainer.py
-───────────────────────
-Training loop for the GraphSAGE + Hadamard MLP baseline on ogbl-ddi.
-
-Features
-────────
-• Mini-batch positive-edge training
-• Online negative sampling via PyTorch Geometric's `negative_sampling`
-• Early stopping on validation Hits@20 with configurable patience
-• Best model checkpoint saving / loading
-• Val and test both use self.edge_index (train edges only) for message-passing,
-  matching the ogbl-ddi leaderboard convention
-• BUG5 fix: gradient clipping on embedding table
-• Weights & Biases logging
-"""
+"""Training loop for the GraphSAGE + Hadamard MLP baseline on ogbl-ddi"""
 
 from __future__ import annotations
 
 import logging
 import os
 import time
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -39,19 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class Trainer:
-    """Manages the full training lifecycle for one run.
-
-    Parameters
-    ----------
-    encoder   : GraphSAGEEncoder
-    predictor : NeuralLinkPredictor
-    edge_index : [2, E] undirected training edge_index — used for message-passing at train, val, and test
-    split     : OGB edge split dict
-    evaluator : OGB Evaluator
-    cfg       : Hydra DictConfig
-    device    : torch.device
-    run_id    : integer index for this run
-    """
+    """Manages the full training lifecycle for one run"""
 
     def __init__(
         self,
@@ -76,6 +49,13 @@ class Trainer:
         self.device = device
         self.run_id = run_id
 
+
+        _perf = cfg.get("perf", None) if hasattr(cfg, "get") else None
+        _perf = _perf if _perf is not None else {}
+        self.encoder.use_dense_adj = bool(_perf.get("dense_adj", False))
+        self._fast_neg = bool(_perf.get("fast_negatives", False))
+        self._edge_keys: Optional[Tensor] = None
+
         self.optimizer = Adam(
             list(encoder.parameters()) + list(predictor.parameters()),
             lr=cfg.training.lr,
@@ -88,10 +68,53 @@ class Trainer:
         os.makedirs(cfg.training.save_dir, exist_ok=True)
         self.ckpt_path = os.path.join(cfg.training.save_dir, f"best_run{run_id}.pt")
 
-    # ── training step ─────────────────────────────────────────────────────────
 
-    def train_epoch(self) -> float:
-        """Run one full epoch and return mean binary cross-entropy loss."""
+
+
+
+    def _sample_negatives(self, n: int) -> Tensor:
+        """[2, n] node pairs that are not edges of `self.edge_index`"""
+        num_nodes = self.encoder.num_nodes
+        if not self._fast_neg:
+            return negative_sampling(
+                edge_index=self.edge_index, num_nodes=num_nodes, num_neg_samples=n
+            ).to(self.device)
+        if self._edge_keys is None:
+            self._edge_keys = torch.unique(self.edge_index[0] * num_nodes + self.edge_index[1])
+        keys = self._edge_keys
+        us, vs, have = [], [], 0
+        while have < n:
+            m = int((n - have) * 1.3) + 16
+            u = torch.randint(0, num_nodes, (m,), device=self.device)
+            v = torch.randint(0, num_nodes, (m,), device=self.device)
+            k = u * num_nodes + v
+            idx = torch.searchsorted(keys, k).clamp_(max=keys.numel() - 1)
+            keep = keys[idx] != k
+            us.append(u[keep])
+            vs.append(v[keep])
+            have += int(keep.sum())
+        return torch.stack([torch.cat(us)[:n], torch.cat(vs)[:n]])
+
+    def _aggregated_params(self) -> List[Tensor]:
+        """Parameter tensors that participate in FL aggregation"""
+        _ENC_KEYS = frozenset(["convs", "feature_proj"])
+        _PRED_KEYS = frozenset(["mlp"])
+        result: List[Tensor] = []
+        for name, p in self.encoder.named_parameters():
+            if any(k in name for k in _ENC_KEYS):
+                result.append(p)
+        for name, p in self.predictor.named_parameters():
+            if any(k in name for k in _PRED_KEYS):
+                result.append(p)
+        return result
+
+
+    def train_epoch(
+        self,
+        fedprox_mu: float = 0.0,
+        global_params: Optional[List[Tensor]] = None,
+    ) -> float:
+        """Run one full epoch and return mean binary cross-entropy loss"""
         self.encoder.train()
         self.predictor.train()
 
@@ -102,6 +125,9 @@ class Trainer:
         total_loss = 0.0
         n_batches = 0
 
+
+        _use_fedprox = fedprox_mu > 0.0 and global_params is not None
+
         perm = torch.randperm(train_pos.size(0))
         train_pos = train_pos[perm]
 
@@ -109,30 +135,26 @@ class Trainer:
             end = min(start + batch_size, train_pos.size(0))
             pos_batch = train_pos[start:end].to(self.device)
 
-            # NOTE: the encoder forward pass is recomputed for every batch
-            # (not just once per epoch). This is intentional, not wasteful:
-            # each batch below ends in optimizer.step(), which updates the
-            # encoder's weights — so the embeddings must be recomputed
-            # afterwards to reflect the latest weights for the next batch.
-            # Re-using one stale `h` across multiple optimizer steps would
-            # silently train against out-of-date embeddings.
-            h = self.encoder(self.edge_index)  # [N, D]
+
+
+
+
+
+
+
+            h = self.encoder(self.edge_index)
 
             src_p, dst_p = pos_batch[:, 0], pos_batch[:, 1]
 
-            # Fetch distance encoding if available
+
             d_u_p, d_v_p = None, None
             d_u_n, d_v_n = None, None
             if self.dist_enc is not None:
                 d_u_p, d_v_p = self.dist_enc[src_p], self.dist_enc[dst_p]
 
-            logits_p = self.predictor(h[src_p], h[dst_p], d_u_p, d_v_p)  # [B, 1]
+            logits_p = self.predictor(h[src_p], h[dst_p], d_u_p, d_v_p)
 
-            neg_ei = negative_sampling(
-                edge_index=self.edge_index,
-                num_nodes=num_nodes,
-                num_neg_samples=pos_batch.size(0) * num_neg,
-            ).to(self.device)
+            neg_ei = self._sample_negatives(pos_batch.size(0) * num_neg)
             src_n, dst_n = neg_ei[0], neg_ei[1]
 
             if self.dist_enc is not None:
@@ -140,21 +162,51 @@ class Trainer:
 
             logits_n = self.predictor(
                 h[src_n], h[dst_n], d_u_n, d_v_n
-            )  # [B*num_neg, 1]
+            )
 
             loss = F.binary_cross_entropy_with_logits(
                 logits_p, torch.ones_like(logits_p)
             ) + F.binary_cross_entropy_with_logits(logits_n, torch.zeros_like(logits_n))
 
+
+
+
+
+
+
+
+
+
+
+
+
             self.optimizer.zero_grad()
             loss.backward()  # type: ignore
 
-            # FIX BUG5: clip gradients — large embedding table causes explosions
+
+
+
+
+
             if self.cfg.training.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(
                     list(self.encoder.parameters()) + list(self.predictor.parameters()),
                     max_norm=self.cfg.training.grad_clip,
                 )
+
+
+
+
+
+
+
+            if _use_fedprox:
+                for p, g in zip(
+                    self._aggregated_params(),
+                    global_params,  # type: ignore[arg-type]
+                ):
+                    if p.grad is not None:
+                        p.grad.data.add_(fedprox_mu * (p.data - g.data))
 
             self.optimizer.step()  # type: ignore
             total_loss += loss.item()
@@ -163,19 +215,19 @@ class Trainer:
         self.scheduler.step()
         return total_loss / max(n_batches, 1)
 
-    # ── main training loop ────────────────────────────────────────────────────
 
-    def train(self) -> Dict[str, float]:
-        """Run full training loop with early stopping.
-
-        Returns
-        -------
-        dict with keys "best_val_hits20", "test_hits20_at_best_val"
-        """
+    def train(self) -> Dict[str, Any]:
+        """Run full training loop with early stopping"""
         cfg = self.cfg
         best_val = 0.0
         test_at_best_val = 0.0
         patience_counter = 0
+
+        history = {
+            "eval_epochs": [],
+            "val_hits20": [],
+            "test_hits20": []
+        }
 
         logger.info(
             "Run %d — starting training for up to %d epochs …",
@@ -214,6 +266,10 @@ class Trainer:
 
                 val_h20 = val_hits.get("Hits@20", 0.0)
                 test_h20 = test_hits.get("Hits@20", 0.0)
+
+                history["eval_epochs"].append(epoch)
+                history["val_hits20"].append(val_h20)
+                history["test_hits20"].append(test_h20)
 
                 wandb.log(
                     {
@@ -269,9 +325,9 @@ class Trainer:
         return {
             "best_val_hits20": best_val,
             "test_hits20_at_best_val": test_at_best_val,
+            "history": history,
         }
 
-    # ── checkpoint helpers ────────────────────────────────────────────────────
 
     def _save_checkpoint(self) -> None:
         torch.save(
@@ -302,31 +358,7 @@ def build_client_trainer(
     device: torch.device,
     node_dist_enc: Tensor | None = None,
 ) -> Trainer:
-    """Construct one federated client's Trainer.
-
-    This is the single place that defines what a federated client "is" in
-    this project. Every client built by this function gets:
-
-      • the IDENTICAL shared global graph (`graph`) — never a per-client
-        subgraph or partition. Every call to this function for the same FL
-        run should be passed the same `graph` tensor; client_fn never asks
-        this function to construct a different topology per client.
-      • the IDENTICAL fixed `node_features` tensor (same public structural
-        features for every client — Strategy 1's globally-aligned
-        coordinate frame).
-      • its OWN `train_edges` — this client's private local training
-        observations. Today every client is passed the same full
-        `train_edges` (a clean FedAvg baseline); heterogeneous per-client
-        observation sampling is introduced in a later step without
-        changing this function's contract.
-      • its OWN brand-new `GraphSAGEEncoder` instance.
-      • its OWN brand-new `NeuralLinkPredictor` instance.
-      • its OWN `Adam` optimizer (created inside `Trainer.__init__`, scoped
-        to only this client's encoder/predictor parameters).
-
-    No client built here shares a model or optimizer with any other client;
-    only the read-only graph and node_features are shared by reference.
-    """
+    """Construct one federated client's Trainer"""
     encoder = GraphSAGEEncoder(
         num_nodes=num_nodes,
         hidden_dim=cfg.model.hidden_dim,

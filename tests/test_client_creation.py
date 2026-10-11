@@ -1,21 +1,6 @@
-# pyright: reportMissingParameterType=false, reportUnknownParameterType=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
-"""
-tests/test_client_creation.py
-──────────────────────────────
-Verifies the federated client-construction contract introduced in Step 2
-("Simplify client creation"): build_client_trainer() must give every client
-
-  • the IDENTICAL shared global graph (no per-client subgraph/partition)
-  • the IDENTICAL fixed node_features tensor
-  • its OWN encoder / predictor model instances
-  • its OWN optimizer, scoped to only its own parameters
-  • its OWN local training observations (today: identical content across
-    clients, since this is the clean FedAvg baseline before heterogeneous
-    observation sampling is introduced)
-
-These tests use real GraphSAGEEncoder / NeuralLinkPredictor / Trainer
-objects (no stubbing) against a tiny synthetic graph, so they double as a
-"does main_fl.py's client-building path still run" smoke check.
+"""Verifies the federated client-construction contract introduced in Step 2 ("Simplify client
+creation"): build_client_trainer() must give every client • the IDENTICAL shared global graph
+(no per-client subgraph/partition) • the IDENTICAL fixed node_features tensor • its OWN.
 """
 
 from __future__ import annotations
@@ -33,8 +18,9 @@ FEAT_DIM = 8
 
 
 class _FakeEvaluator:
-    """Minimal OGB-Evaluator-shaped stub: just enough for Trainer/evaluate
-    to call .eval(...) without needing the real ogbl-ddi Evaluator."""
+    """Minimal OGB-Evaluator-shaped stub: just enough for Trainer/evaluate to call .eval(...)
+    without needing the real ogbl-ddi Evaluator.
+    """
 
     def eval(self, input_dict):
         pos = input_dict["y_pred_pos"]
@@ -135,12 +121,13 @@ class TestBuildClientTrainer:
         assert all(isinstance(c, Trainer) for c in clients)
 
     def test_every_client_shares_identical_graph(self, graph, node_features, split, evaluator, cfg):
-        """No per-client subgraph/partition: every client's edge_index must
-        have the exact same content as the one shared `graph`."""
+        """No per-client subgraph/partition: every client's edge_index must have the exact same
+        content as the one shared `graph`.
+        """
         clients = _build_clients(graph, node_features, split, evaluator, cfg, num_clients=4)
         for c in clients:
             assert torch.equal(c.edge_index, graph)
-        # ...and therefore identical to each other too.
+
         for a, b in zip(clients, clients[1:]):
             assert torch.equal(a.edge_index, b.edge_index)
 
@@ -154,8 +141,9 @@ class TestBuildClientTrainer:
     def test_every_client_has_its_own_model_instances(
         self, graph, node_features, split, evaluator, cfg
     ):
-        """Models must NOT be shared objects across clients — otherwise one
-        client's local training would silently mutate another's weights."""
+        """Models must NOT be shared objects across clients — otherwise one client's local training
+        would silently mutate another's weights.
+        """
         c0, c1, c2 = _build_clients(graph, node_features, split, evaluator, cfg, num_clients=3)
         assert c0.encoder is not c1.encoder
         assert c1.encoder is not c2.encoder
@@ -168,7 +156,7 @@ class TestBuildClientTrainer:
         c0, c1 = _build_clients(graph, node_features, split, evaluator, cfg, num_clients=2)
         assert c0.optimizer is not c1.optimizer
 
-        # Each optimizer should only hold ITS OWN client's parameters.
+
         c0_param_ids = {id(p) for p in c0.optimizer.param_groups[0]["params"]}
         c1_own_param_ids = {id(p) for p in c0.encoder.parameters()}.union(
             {id(p) for p in c0.predictor.parameters()}
@@ -183,10 +171,10 @@ class TestBuildClientTrainer:
     def test_clients_get_their_own_local_observations(
         self, graph, node_features, split, evaluator, cfg
     ):
-        """Today every client is passed the same observation set (clean
-        FedAvg baseline) — this test documents that current behavior so a
-        future step introducing heterogeneous observations changes it
-        deliberately, not silently."""
+        """Today every client is passed the same observation set (clean FedAvg baseline) — this
+        test documents that current behavior so a future step introducing heterogeneous
+        observations changes it deliberately, not silently.
+        """
         clients = _build_clients(graph, node_features, split, evaluator, cfg, num_clients=3)
         for c in clients:
             assert torch.equal(c.split["train"]["edge"], split["train"])
@@ -194,12 +182,13 @@ class TestBuildClientTrainer:
     def test_local_training_on_one_client_does_not_affect_another(
         self, graph, node_features, split, evaluator, cfg
     ):
-        """End-to-end confirmation: one client's optimizer.step() must only
-        move ITS OWN encoder's weights."""
+        """End-to-end confirmation: one client's optimizer.step() must only move ITS OWN encoder's
+        weights.
+        """
         c0, c1 = _build_clients(graph, node_features, split, evaluator, cfg, num_clients=2)
         c1_params_before = [p.clone() for p in c1.encoder.parameters()]
 
-        c0.train_epoch()  # local update on client 0 only
+        c0.train_epoch()
 
         for p_before, p_after in zip(c1_params_before, c1.encoder.parameters()):
             assert torch.equal(p_before, p_after)

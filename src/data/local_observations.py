@@ -1,46 +1,3 @@
-"""
-src/data/local_observations.py
-────────────────────────────────
-Heterogeneous LOCAL OBSERVATIONS for federated clients (FedDrift direction).
-
-Per the FedDrift research proposal: hospitals do not own different subsets
-of the DDI GRAPH — drug knowledge is already public (DrugBank, ChEMBL,
-OGB-DDI are globally accessible to every institution). Instead, hospitals
-own distinct CLINICAL REALITIES: different mixes of which interactions they
-observe/prescribe, reflecting their patient population and therapeutic-area
-specialization.
-
-This module partitions / samples TRAINING OBSERVATIONS (edges used as
-positive training targets) — it never partitions nodes and never touches
-the message-passing graph itself. Every client still trains GraphSAGE
-message-passing over the complete shared global graph (see
-`build_client_trainer` in `src/training/trainer.py` and the "Graph
-ownership model" docstring in `main_fl.py`) — only each client's local
-training TARGETS differ.
-
-Heterogeneity is generated via ATC-aware Dirichlet sampling, matching the
-proposal's worked example almost exactly:
-
-    Hospital A: 70% Cardiovascular / 20% Diabetes / 10% Oncology
-    Hospital B: 65% Oncology / 20% Antibiotics / 15% Cardiovascular
-    Hospital C: 60% Infectious Disease / 25% Respiratory / 15% Cardiovascular
-
-Each client draws a personalized mixture over ATC Level-1 therapeutic
-classes from a symmetric Dirichlet(alpha) distribution, then samples its
-local observations from the global training edges according to that
-mixture — WITH replacement. Repeatedly "observing" / prescribing the same
-already-known interaction is realistic and is how prescription FREQUENCY
-differs across hospitals; it is not edge ownership, and two clients may
-legitimately share edges in their local observation sets.
-
-`sample_observations()` is the shared low-level primitive (given an
-explicit target mixture, draw N observations) — `generate_client_observations()`
-is the higher-level entry point that draws Dirichlet-random mixtures for
-every client. A later concept-drift step reuses `sample_observations()`
-directly with a new TARGET mixture per round, without changing this
-module's contract.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -56,30 +13,41 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LocalObservationDataset:
-    """One federated client's private local clinical observations.
-
-    This is NOT a graph partition. `edges` is a (possibly repeating)
-    multiset of training interactions drawn from the SAME global graph
-    every other client also trains GraphSAGE message-passing over. Two
-    clients may legitimately share edges — what differs between clients is
-    the relative FREQUENCY/MIX with which each one observes interactions
-    from different therapeutic areas, not which edges they "own".
-
-    Attributes
-    ----------
-    client_id : int
-    edges : LongTensor [num_observations, 2]
-        This client's local positive training observations (src, dst
-        pairs). May contain duplicates by design (see module docstring).
-    class_mixture : Dict[int, float]
-        The ATC Level-1 class proportions this client's observations were
-        sampled from. Kept for inspection/logging and reused as the
-        starting point for round-by-round concept-drift simulation.
-    """
+    """One federated client's private local clinical observations"""
 
     client_id: int
     edges: Tensor
     class_mixture: Dict[int, float] = field(default_factory=dict)
+    false_negative_edges: Tensor = field(
+        default_factory=lambda: torch.empty(0, 2, dtype=torch.long)
+    )
+    """POISONING overlay (see `src/data/poisoning.py:apply_label_flips`).
+    Edges that ARE true positive interactions in the global graph, but
+    that this (malicious) client's local training LABELS AS NEGATIVE
+    (label=0) — e.g. a compromised client suppressing a known
+    interaction. Distinct from `edges` (label=1): a member of
+    `false_negative_edges` asserts something FALSE about a fixed edge,
+    which is what makes this an adversarial corruption rather than a
+    change in observation frequency or an honest covariate shift. Empty
+    (the default) for honest clients / rounds with no active attack.
+    """
+    emerged_edges: Tensor = field(
+        default_factory=lambda: torch.empty(0, 2, dtype=torch.long)
+    )
+    """POISONING overlay, counterpart to `false_negative_edges`. Synthetic
+    edges injected by `apply_label_flips` (via `emerge`) that are NOT true
+    interactions in the global graph, but that this (malicious) client's
+    local training LABELS AS POSITIVE (label=1) — e.g. a compromised
+    client fabricating a new, unverified interaction. These edges are
+    ALSO present (mixed in, indistinguishable) inside `edges` — they are
+    trained on exactly like any other positive observation. This field
+    exists purely so a caller can identify and directly diagnose these
+    specific edges later (see `score_edge_set` in
+    `src/training/evaluate.py`, used to measure poisoning ATTACK SUCCESS —
+    does the aggregated global model actually believe the fabrication?),
+    separately from tracking what fraction of `edges` they represent.
+    Empty (the default) for honest clients / rounds with no active attack.
+    """
 
     def __len__(self) -> int:
         return int(self.edges.size(0))
@@ -87,21 +55,26 @@ class LocalObservationDataset:
     def __repr__(self) -> str:
         top = sorted(self.class_mixture.items(), key=lambda kv: -kv[1])[:3]
         top_str = ", ".join(f"class {c}: {p:.0%}" for c, p in top)
+        flip_str = (
+            f", false_neg={self.false_negative_edges.size(0)}"
+            if self.false_negative_edges.size(0) > 0
+            else ""
+        )
+        emerge_str = (
+            f", emerged={self.emerged_edges.size(0)}"
+            if self.emerged_edges.size(0) > 0
+            else ""
+        )
         return (
             f"LocalObservationDataset(client={self.client_id}, "
-            f"n_observations={len(self)}, top_classes=[{top_str}])"
+            f"n_observations={len(self)}, top_classes=[{top_str}]"
+            f"{flip_str}{emerge_str})"
         )
 
 
 def _edge_classes(train_edges: Tensor, atc_mapping: Optional[Tensor]) -> np.ndarray:
-    """Map every training edge to a therapeutic-area class using its SOURCE
-    node's ATC Level-1 code (see scripts/prepare_atc_mapping.py).
-
-    If no ATC mapping is available, every edge is treated as belonging to
-    one single class — heterogeneity then comes only from which specific
-    edges / how often each client samples them, not from a therapeutic
-    mix. This lets the rest of the pipeline keep working (e.g. in tests,
-    or before `prepare_atc_mapping.py` has been run) without crashing.
+    """Map every training edge to a therapeutic-area class using its SOURCE node's ATC Level-1 code
+    (see scripts/prepare_atc_mapping.py)
     """
     if atc_mapping is None:
         return np.zeros(train_edges.size(0), dtype=np.int64)
@@ -116,18 +89,8 @@ def sample_observations(
     n_obs: int,
     rng: np.random.Generator,
 ) -> Tensor:
-    """Sample `n_obs` training edges (WITH replacement) according to an
-    explicit per-ATC-class target `mixture`.
-
-    This is the shared low-level primitive: `generate_client_observations`
-    below calls it with a Dirichlet-random mixture per client; a later
-    concept-drift simulator calls it directly with an explicit, evolving
-    TARGET mixture per round, on the same global `train_edges`.
-
-    Classes in `mixture` that have zero matching edges in `train_edges`
-    are dropped and the remaining probabilities renormalized, so this
-    never crashes on an empty pool — it just can't honor a class that
-    truly has no representative edges yet.
+    """Sample `n_obs` training edges (WITH replacement) according to an explicit per-ATC-class
+    target `mixture`
     """
     edge_classes = _edge_classes(train_edges, atc_mapping)
     classes_present = np.unique(edge_classes)
@@ -160,6 +123,17 @@ def sample_observations(
     return train_edges[torch.from_numpy(sampled_idx).long()]
 
 
+def build_edge_lookup(train_edges: Tensor) -> frozenset:
+    """Build an O(1)-membership set of undirected edges for negative rejection-sampling in
+    `src/data/poisoning.py:apply_label_flips`
+    """
+    arr = train_edges.cpu().numpy()
+
+    lo = np.minimum(arr[:, 0], arr[:, 1])
+    hi = np.maximum(arr[:, 0], arr[:, 1])
+    return frozenset(zip(lo.tolist(), hi.tolist()))
+
+
 def generate_client_observations(
     train_edges: Tensor,
     num_clients: int,
@@ -168,42 +142,7 @@ def generate_client_observations(
     dirichlet_alpha: float = 0.5,
     seed: Optional[int] = None,
 ) -> List[LocalObservationDataset]:
-    """Generate one heterogeneous `LocalObservationDataset` per client.
-
-    Does NOT touch the graph or its nodes: `train_edges` is sampled FROM
-    (with replacement), never restricted to a node-induced subgraph. Every
-    edge returned for every client is a real edge from the shared global
-    graph's training split.
-
-    Parameters
-    ----------
-    train_edges : LongTensor [E, 2]
-        The GLOBAL positive training edges (identical for every client's
-        message-passing graph).
-    num_clients : int
-    atc_mapping : Optional LongTensor [num_nodes]
-        Maps node -> ATC Level-1 class index (see
-        scripts/prepare_atc_mapping.py). If None, heterogeneity is
-        class-agnostic (every edge is one class).
-    observations_per_client : Optional[int]
-        How many local observations to sample per client. Defaults to
-        `len(train_edges)` — each client trains on as many local
-        observations as the original full training set, just resampled
-        according to its own mixture.
-    dirichlet_alpha : float
-        Concentration parameter for each client's personal class mixture.
-        Smaller alpha => more skewed/heterogeneous mixtures across clients
-        (alpha -> inf => every client converges to the same, uniform
-        mixture over classes). Matches the standard non-IID FL Dirichlet
-        partitioning convention (Hsu et al., 2019) — applied here to
-        OBSERVATIONS, not to nodes.
-    seed : Optional[int]
-        RNG seed. None => a fresh, unseeded default RNG.
-
-    Returns
-    -------
-    List[LocalObservationDataset], one per client, index == client_id.
-    """
+    """Generate one heterogeneous `LocalObservationDataset` per client"""
     if num_clients < 1:
         raise ValueError(f"num_clients must be >= 1, got {num_clients}")
     if dirichlet_alpha <= 0:

@@ -1,35 +1,4 @@
-"""
-predict.py
-──────────
-Inference script: load a saved checkpoint and score arbitrary node pairs.
-
-Usage
-─────
-  # Score all test positive + negative edges and print Hits@20
-  python predict.py checkpoint=./checkpoints/best_run0.pt
-
-  # Score a custom CSV of node pairs  (columns: src,dst)
-  python predict.py checkpoint=./checkpoints/best_run0.pt \
-                    input_csv=./my_pairs.csv \
-                    output_csv=./scores.csv
-
-  # Score and output probabilities for the full OGB test split
-  python predict.py checkpoint=./checkpoints/best_run0.pt \
-                    mode=test_split
-
-CSV format (input)
-──────────────────
-src,dst
-0,42
-100,3001
-…
-
-CSV format (output)
-───────────────────
-src,dst,score,prob
-0,42,2.31,0.91
-…
-"""
+"""Inference script: load a saved checkpoint and score arbitrary node pairs"""
 
 from __future__ import annotations
 
@@ -62,7 +31,7 @@ def main(cfg: DictConfig) -> None:
     mode: str = cfg.get("mode", "test_split")
 
     if checkpoint is None:
-        logger.error("No checkpoint specified. Use: python predict.py checkpoint=PATH")
+        logger.error("No checkpoint specified. Use: python predict.py +checkpoint=PATH")
         sys.exit(1)
 
     device = get_device(cfg.device)

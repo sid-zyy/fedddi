@@ -1,9 +1,4 @@
-# pyright: reportMissingParameterType=false, reportUnknownParameterType=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
-"""
-tests/test_utils.py
-───────────────────
-Tests for utility helpers: seeding, device selection, results formatting.
-"""
+"""Tests for utility helpers: seeding, device selection, results formatting."""
 
 from __future__ import annotations
 
@@ -84,7 +79,7 @@ class TestPrettyResults:
             {"best_val_hits20": 0.90, "test_hits20_at_best_val": 0.90},
         ]
         table = pretty_results(results)
-        # Mean should be 0.8500
+
         assert "0.8500" in table
 
     def test_empty_results(self):

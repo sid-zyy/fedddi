@@ -1,14 +1,8 @@
-"""
-tests/conftest.py
-─────────────────
-Shared fixtures for the test suite.
-"""
+"""Shared fixtures for the test suite."""
 
 from __future__ import annotations
 
 import pytest
-import torch
-from torch_geometric.data import Data  # type: ignore
 
 NUM_NODES = 50
 NUM_EDGES = 200
@@ -18,6 +12,9 @@ HIDDEN_DIM = 32
 @pytest.fixture
 def synthetic_graph() -> Data:
     """A small random graph for fast tests."""
+    import torch
+    from torch_geometric.data import Data
+
     src = torch.randint(0, NUM_NODES, (NUM_EDGES,))
     dst = torch.randint(0, NUM_NODES, (NUM_EDGES,))
     edge_index = torch.stack([src, dst], dim=0)
@@ -34,6 +31,8 @@ def edge_index(synthetic_graph: Data) -> torch.Tensor:
 @pytest.fixture
 def synthetic_split(edge_index: torch.Tensor) -> dict[str, dict[str, torch.Tensor]]:
     """Minimal train/valid/test split mirroring OGB structure."""
+    import torch
+
     n = edge_index.size(1)
     edges_t = edge_index.t()
 

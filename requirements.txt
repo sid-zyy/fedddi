@@ -13,3 +13,8 @@ flwr[simulation]>=1.10.0  # ServerApp/ClientApp/run_simulation API (used in main
 requests==2.32.4
 protobuf>=5.26.1,<6.0.0
 rdkit
+optuna>=3.6.0
+matplotlib
+pyyaml>=6.0
+
+pandas>=1.5.0

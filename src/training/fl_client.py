@@ -1,58 +1,10 @@
-"""
-src/training/fl_client.py  (Strategy 1 — Feature Bootstrapping)
-─────────────────────────────────────────────────────────────────
-Flower NumPyClient for FedDDI-GNN.
-
-Key design points
-──────────────────
-1. get_parameters / set_parameters include `feature_proj` unconditionally.
-   In Strategy 1 every client has a feature_proj (there is no private
-   embedding table), so this is always correct. In the legacy embedding mode
-   the parameter filter still excludes `embedding` as before.
-
-2. fit() resets the optimizer state at the start of each FL round so that
-   stale momentum from the previous round does not corrupt the update
-   direction after new server weights are installed.
-
-3. evaluate() reports federated_Hits@20 — the GLOBAL validation set scored
-   with this client's own encoder. This is meaningful because all clients
-   share the same fixed feature coordinate frame (Strategy 1) AND the same
-   global graph (every client trains and evaluates over the complete,
-   public DDI edge_index — there is no client-specific subgraph to score
-   "locally" against; see main_fl.py's "Graph ownership model" docstring).
-
-4. The `server_diagnostic` path is GONE from the client. The server has its
-   own global encoder for diagnostics (main_fl.py). The client only needs to
-   report the metric above.
-
-Aggregation correctness (why evaluate() gives real numbers)
-───────────────────────────────────────────────────────────────
-OLD (broken): each client's embedding lived in a private Rⁿ. Aggregating
-  convs/MLP on top of orthogonal Rⁿ spaces produced a "global model" whose
-  node representations had no consistent meaning: encoder(v) on client A vs.
-  encoder(v) on client B pointed in unrelated directions. The predictor MLP,
-  trying to make sense of Hadamard products of such vectors, produced random
-  logits — hence Hits@20 ≈ 0.
-
-NEW (Strategy 1 + shared global graph): every client computes
-  h = feature_proj(fixed_feats) where fixed_feats is identical across all
-  clients, AND the SAGEConv message-passing graph itself is the same
-  complete global edge_index on every client. FedAvg averages the
-  gradients of feature_proj → produces a *consensus projection* that maps
-  the shared feature space into hidden_dim. SAGEConv and MLP are
-  aggregated on top of this aligned input and trained against the true
-  global neighborhood structure, so the aggregated model is
-  self-consistent: evaluating it on ANY client with the full edge
-  neighbourhood produces logits in the same score space as every other
-  client — and against the global validation set, that means real Hits@20
-  that should approach the centralized baseline, not just a non-degenerate
-  one.
-"""
+"""Flower NumPyClient for FedDDI-GNN"""
 
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
+import time
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -63,9 +15,7 @@ from src.training.trainer import Trainer
 
 logger = logging.getLogger(__name__)
 
-# Parameter name groups — kept as module-level constants so get/set_parameters
-# and main_fl.py's initial_parameters block are always in sync.
-# ALL of these are included in the aggregation; only `embedding` is excluded.
+
 _ENCODER_AGG_KEYS = frozenset(["convs", "feature_proj"])
 _PREDICTOR_AGG_KEYS = frozenset(["mlp"])
 
@@ -85,35 +35,115 @@ class FedDDIClient(NumPyClient):
         trainer: Trainer,
         local_epochs: int,
         device: torch.device,
+        algorithm: str = "fedavg",
+        mu: float = 0.0,
+        num_rounds: int = 1,
+        update_scale: float = 1.0,
+        poison_target_edges: Optional[torch.Tensor] = None,
+        drifted_node_mask: Optional[torch.Tensor] = None,
+        c_id_int: Optional[int] = None,
+        poisoning_simulator: Optional[object] = None,
+        data_drift_simulator: Optional[object] = None,
     ):
         self.cid = cid
         self.trainer = trainer
         self.local_epochs = local_epochs
         self.device = device
+        self.algorithm = algorithm.lower()
+        self.mu = mu
+        self.num_rounds = num_rounds
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        self.update_scale = update_scale
+        self.poison_target_edges = poison_target_edges
+        self.c_id_int = c_id_int
+        self.poisoning_simulator = poisoning_simulator
+        self.data_drift_simulator = data_drift_simulator
+
+
+
+
+
+
+
+        self.drifted_node_mask = drifted_node_mask
 
         self.encoder = trainer.encoder
         self.predictor = trainer.predictor
 
-        # Warn loudly if running in legacy embedding mode — federated results
-        # will be near-zero regardless of training budget.
+
+        self._num_model_params: int = len(self.get_parameters(config={}))
+
+
+
         if not self.encoder.uses_fixed_features:
             logger.warning(
                 "[Client %s] Encoder is in LEGACY EMBEDDING mode (no fixed features). "
                 "Federated Hits@20 will be near-zero due to orthogonal client spaces. "
                 "Set use_features=true and feature_types=[structural] to enable "
-                "Strategy 1 (Feature Bootstrapping).",
+                "Feature Bootstrapping (fixed global features).",
                 cid,
             )
 
-    # ── parameter serialisation ───────────────────────────────────────────────
+
+    def _refresh_round_state(self, config: Dict[str, Scalar]) -> None:
+        """Re-derive this round's poisoned dataset, update_scale, poison target edges, and drift
+        delta from `config["server_round"]`
+        """
+        server_round = int(config.get("server_round", 0))
+
+        if self.poisoning_simulator is not None and self.c_id_int is not None:
+            current_datasets = self.poisoning_simulator.step(server_round)
+            ds = current_datasets[self.c_id_int]
+            self.trainer.split["train"]["edge"] = ds.edges.to(self.device)
+            if ds.emerged_edges.numel() or ds.false_negative_edges.numel():
+                self.poison_target_edges = torch.cat(
+                    [ds.emerged_edges, ds.false_negative_edges], dim=0
+                ).to(self.device)
+            else:
+                self.poison_target_edges = None
+            self.update_scale = self.poisoning_simulator.update_scale(
+                self.c_id_int, server_round
+            )
+
+        if self.data_drift_simulator is not None and self.c_id_int is not None:
+            deltas = self.data_drift_simulator.step(server_round)
+            self.encoder.set_feature_delta_(deltas.get(self.c_id_int))
+            self.drifted_node_mask = self.data_drift_simulator.drifted_node_mask(
+                self.c_id_int
+            )
+
 
     def get_parameters(self, config: Dict[str, Scalar]) -> List[np.ndarray]:
-        """Return the subset of parameters to be aggregated by the server.
-
-        Includes: encoder convs, encoder feature_proj (Strategy 1), predictor MLP.
-        Excludes: encoder embedding (legacy private table — should not exist in
-                  Strategy 1, but guarded against for backward compatibility).
-        """
+        """Return the subset of parameters to be aggregated by the server"""
         agg_params: List[np.ndarray] = []
         for name, param in self.encoder.named_parameters():
             if _is_aggregated_encoder_param(name):
@@ -146,87 +176,140 @@ class FedDDIClient(NumPyClient):
                 idx += 1
         self.predictor.load_state_dict(state_dict_pred, strict=False)
 
-    # ── fit ──────────────────────────────────────────────────────────────────
+
+    def _sync_cuda(self) -> None:
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
 
     def fit(
         self,
         parameters: List[np.ndarray],
         config: Dict[str, Scalar],
     ) -> Tuple[List[np.ndarray], int, Dict[str, Scalar]]:
-        """Install global weights, run local_epochs of SGD, return updated weights.
+        """Install global weights, run local_epochs of SGD, return updated weights"""
 
-        Critical fix: optimizer state is reset before installing the new server
-        weights. Without this, Adam's first-moment / second-moment estimates
-        from round N are applied to the gradient of round N+1's starting point,
-        which was set by a *different* aggregation of all clients. Stale
-        momentum corrupts the early steps of each local training phase and
-        slows convergence — especially noticeable with non-IID data where the
-        aggregated model may be far from the local optimum.
-        """
-        # Reset optimizer: clear stale momentum from the previous round.
+
+        _t_fit0 = time.perf_counter()
+        self._refresh_round_state(config)
+
+
         for group in self.trainer.optimizer.param_groups:
-            group["params_backup_lr"] = group["lr"]  # save LR
+            group["params_backup_lr"] = group["lr"]
         self.trainer.optimizer.state.clear()
         for group in self.trainer.optimizer.param_groups:
             group["lr"] = group.get("params_backup_lr", self.trainer.cfg.training.lr)
 
-        # Install the freshly aggregated global model.
+
         self.set_parameters(parameters)
 
+
+
+
+        global_params_t: Optional[List[torch.Tensor]] = None
+        if self.algorithm == "fedprox" and self.mu > 0.0:
+            global_params_t = [
+                torch.tensor(p, dtype=torch.float32, device=self.device)
+                for p in parameters
+            ]
+
         logger.info(
-            "[Client %s] Starting local training for %d epochs",
+            "[Client %s] Starting local training (%s) for %d epochs",
             self.cid,
+            self.algorithm,
             self.local_epochs,
         )
 
-        # Reset LR to initial and rebuild cosine schedule for this round.
+
         for param_group in self.trainer.optimizer.param_groups:
             param_group["lr"] = self.trainer.cfg.training.lr
 
         self.trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.trainer.optimizer, T_max=max(self.local_epochs, 1)
+            self.trainer.optimizer, T_max=max(self.num_rounds * self.local_epochs, 1)
         )
 
         original_epochs = self.trainer.cfg.training.epochs
         self.trainer.cfg.training.epochs = self.local_epochs
 
+        self._sync_cuda()
+        _t_train0 = time.perf_counter()
         loss = 0.0
         for _ in range(self.local_epochs):
-            loss = self.trainer.train_epoch()
+            loss = self.trainer.train_epoch(
+                fedprox_mu=self.mu if self.algorithm == "fedprox" else 0.0,
+                global_params=global_params_t,
+            )
 
         self.trainer.cfg.training.epochs = original_epochs
+        self._sync_cuda()
+        _t_train = time.perf_counter() - _t_train0
+
+        print(
+            f"[timing] client {self.cid} round {int(config.get('server_round', -1))} fit: "
+            f"setup {_t_train0 - _t_fit0:.2f}s train {_t_train:.2f}s "
+            f"(epochs={self.local_epochs} dense_adj={getattr(self.trainer.encoder, 'use_dense_adj', '?')} "
+            f"fast_neg={getattr(self.trainer, '_fast_neg', '?')})",
+            flush=True,
+        )
+
+        new_params = self.get_parameters(config={})
+
+
+
+
+
+
+        if self.update_scale != 1.0:
+            new_params = [
+                old + self.update_scale * (new - old)
+                for old, new in zip(parameters, new_params)
+            ]
+            logger.info(
+                "[Client %s] Malicious client — boosting returned update "
+                "by update_scale=%.2f before aggregation.",
+                self.cid,
+                self.update_scale,
+            )
 
         num_examples = int(self.trainer.edge_index.size(1))
-        return (
-            self.get_parameters(config={}),
+        result = (
+            new_params,
             num_examples,
             {"loss": float(loss), "cid": int(self.cid)},
         )
 
-    # ── evaluate ─────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
+        return result
+
 
     def evaluate(
         self,
         parameters: List[np.ndarray],
         config: Dict[str, Scalar],
     ) -> Tuple[float, int, Dict[str, Scalar]]:
-        """Score the global model on the global validation set.
-
-        This uses THIS client's encoder — which is correct in Strategy 1
-        because the encoder's input (fixed_features → feature_proj) is
-        globally aligned, and the message-passing graph is the same shared
-        global edge_index used by every client. The aggregated feature_proj
-        + convs + MLP produce a model that scores edges in a globally
-        consistent space.
-
-        Returns
-        -------
-        (loss, num_examples, metrics)
-          metrics["Hits@20"] — federated (global val set, this client's encoder)
-        """
+        """Score the global model on the global validation set"""
+        self._refresh_round_state(config)
         self.set_parameters(parameters)
 
         from src.training.evaluate import evaluate as eval_fn
+        from src.training.evaluate import score_edge_set
 
         val_edges     = self.trainer.split["valid"]["edge"].to(self.device)
         val_edges_neg = self.trainer.split["valid"]["edge_neg"].to(self.device)
@@ -252,5 +335,88 @@ class FedDDIClient(NumPyClient):
             global_val_h20,
         )
 
+
+
+
+
+
+        if self.drifted_node_mask is not None:
+            mask = self.drifted_node_mask.to(self.device)
+            incident = mask[val_edges[:, 0]] | mask[val_edges[:, 1]]
+            drift_region_edges = val_edges[incident]
+            if drift_region_edges.size(0) > 0:
+                drift_hits = eval_fn(
+                    encoder=self.encoder,
+                    predictor=self.predictor,
+                    edge_index=self.trainer.edge_index,
+                    pos_edges=drift_region_edges,
+                    neg_edges=val_edges_neg,
+                    evaluator=self.trainer.evaluator,
+                    batch_size=self.trainer.cfg.training.batch_size,
+                    device=self.device,
+                    node_dist_enc=self.trainer.dist_enc,
+                )
+                metrics["drift_region_Hits@20"] = float(drift_hits.get("Hits@20", 0.0))
+                metrics["drift_region_n"] = int(drift_region_edges.size(0))
+                logger.info(
+                    "[Client %s] evaluate — drift-region Val Hits@20: %.4f (n=%d)",
+                    self.cid,
+                    metrics["drift_region_Hits@20"],
+                    drift_region_edges.size(0),
+                )
+
+
+
+
+
+
+
+
+
+            non_drift_edges = val_edges[~incident]
+            if non_drift_edges.size(0) > 0:
+                non_drift_hits = eval_fn(
+                    encoder=self.encoder,
+                    predictor=self.predictor,
+                    edge_index=self.trainer.edge_index,
+                    pos_edges=non_drift_edges,
+                    neg_edges=val_edges_neg,
+                    evaluator=self.trainer.evaluator,
+                    batch_size=self.trainer.cfg.training.batch_size,
+                    device=self.device,
+                    node_dist_enc=self.trainer.dist_enc,
+                )
+                metrics["non_drift_region_Hits@20"] = float(non_drift_hits.get("Hits@20", 0.0))
+                metrics["non_drift_region_n"] = int(non_drift_edges.size(0))
+
+
+
+
+        if self.poison_target_edges is not None and self.poison_target_edges.numel() > 0:
+            attack_scores = score_edge_set(
+                encoder=self.encoder,
+                predictor=self.predictor,
+                edge_index=self.trainer.edge_index,
+                edges=self.poison_target_edges.to(self.device),
+                batch_size=self.trainer.cfg.training.batch_size,
+                device=self.device,
+                node_dist_enc=self.trainer.dist_enc,
+            )
+            metrics["poison_attack_mean_prob"] = attack_scores["mean_prob"]
+            metrics["poison_attack_n"] = attack_scores["n"]
+            logger.info(
+                "[Client %s] evaluate — poisoning attack mean_prob: %.4f (n=%d)",
+                self.cid,
+                attack_scores["mean_prob"],
+                attack_scores["n"],
+            )
+
         num_examples = int(val_edges.size(0))
+
+
+
+
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
         return 0.0, num_examples, metrics

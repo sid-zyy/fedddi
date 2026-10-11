@@ -1,49 +1,26 @@
-# conf/config.yaml
-# Hydra configuration for FedDDI-GNN — Strategy 1 (Feature Bootstrapping).
-#
-# Key change: use_features is now irrelevant; fixed_features controls the
-# Strategy 1 structural feature computation. The private nn.Embedding table
-# is gone. Every client and the server compute identical fixed node features
-# from the public training graph and share a feature_proj coordinate frame.
-#
-# Graph ownership: there is no client partitioning in this project. Every
-# client trains on the SAME complete global DDI graph (`graph = global_graph`
-# for every client) — see main_fl.py's "Graph ownership model" docstring.
-
+# Set defense.mode=caga for CAGA; none, norm_clip and fltrust are comparison baselines.
+# fltrust shares root_frac and root_device with caga. defense.fltrust_root_obs sets how many root
+# edges the FLTrust server samples per round (default: local_observations.observations_per_client).
 defaults:
-  - _self_
-
-# ── Dataset ────────────────────────────────────────────────────────────────
+- _self_
 dataset:
   name: ogbl-ddi
   root: ./data
-  num_anchors: 0            # set >0 to enable distance encoding in MLP decoder
-  use_features: false       # legacy flag — unused in Strategy 1 (kept for CLI compat)
-  feature_types: []         # legacy flag — unused in Strategy 1
-
-# ── Strategy 1: Fixed Global Features ─────────────────────────────────────
-# These are computed ONCE from the public training edge_index and shared
-# identically by all clients and the server. No private data is leaked.
-# feature_proj (projecting feat_dim → hidden_dim) IS aggregated by FedAvg.
-# Total feat_dim = 2 + num_anchors + num_spectral (default: 2+64+32 = 98)
+  num_anchors: 0
+  use_features: false
+  feature_types: []
 fixed_features:
-  num_anchors: 64           # BFS hop-distances to random anchor nodes
-  num_spectral: 32          # approximate Laplacian eigenvectors (LOBPCG)
-
-# ── GraphSAGE Encoder ─────────────────────────────────────────────────────
+  num_anchors: 32
+  num_spectral: 16
 model:
   hidden_dim: 500
   num_layers: 2
   dropout: 0.3
   normalize: false
-
-# ── NeuralLinkPredictor (Hadamard MLP decoder) ────────────────────────────
 predictor:
   hidden_dim: 512
   num_layers: 3
   dropout: 0.3
-
-# ── Training ───────────────────────────────────────────────────────────────
 training:
   num_runs: 3
   epochs: 500
@@ -56,74 +33,56 @@ training:
   save_dir: ./checkpoints
   seed: 0
   grad_clip: 1.0
-
-# ── Weights & Biases ───────────────────────────────────────────────────────
 wandb:
   mode: disabled
-  project: fedddi-strategy1
+  project: fedddi-gnn
   entity: null
   tags:
-    - graphsage
-    - hadamard-mlp
-    - ogbl-ddi
-    - strategy1-feature-bootstrapping
-
-# ── Centralized baseline mode ──────────────────────────────────────────────
-# use_fixed_features=false → Mode A: learned nn.Embedding (default)
-# use_fixed_features=true  → Mode B: same fixed features as main_fl.py
+  - graphsage
+  - hadamard-mlp
+  - ogbl-ddi
+  - feature-bootstrapping
 baseline:
   use_fixed_features: false
-
-# ── Misc ───────────────────────────────────────────────────────────────────
 device: cuda
 log_level: INFO
-
-# ── Federated simulation ───────────────────────────────────────────────────
 num_clients: 5
-num_rounds: 50
-local_epochs: 10
+num_rounds: 40
+local_epochs: 5
 fraction_evaluate: 1.0
-
-# ── Local observation heterogeneity (NOT graph partitioning) ───────────────
-# Every client trains on the identical shared global graph (see "Graph
-# ownership model" in main_fl.py). Heterogeneity instead comes from which
-# TRAINING OBSERVATIONS each client samples, via ATC-aware Dirichlet
-# sampling — see src/data/local_observations.py.
+fl:
+  algorithm: fedavg
+fedprox:
+  mu: 1.0
 local_observations:
-  dirichlet_alpha: 0.5          # smaller = more skewed/heterogeneous mixtures
-  observations_per_client: null  # null = len(global train edges) per client
-  seed: null                     # null = reuse training.seed
-
-# ── Concept drift (Step 5) ─────────────────────────────────────────────────
-# Controls the ConceptDriftSimulator in main_fl.py.
-# When `events` is empty (or the key is absent), all client distributions
-# remain stable for the entire run — a clean FedAvg baseline.
-# The graph is NEVER touched; only each client's local observation
-# distribution changes.
-#
-# Example usage (uncomment and adjust):
-#
-#   drift:
-#     seed: null          # null = reuse training.seed
-#     events:
-#       - client_id: 0
-#         start_round: 25
-#         kind: sudden    # "sudden" | "gradual"
-#         target_mixture: {0: 0.40, 1: 0.35, 2: 0.25}
-#       - client_id: 1
-#         start_round: 30
-#         kind: gradual
-#         transition_rounds: 10
-#         target_mixture: {2: 0.70, 0: 0.30}
-#
-# Each event dict keys:
-#   client_id         (int)   — which client drifts
-#   start_round       (int)   — first round the drift activates
-#   target_mixture    (dict)  — desired ATC-class proportions after drift
-#                               (keys are int ATC class indices, values are
-#                               non-negative floats; renormalised internally)
-#   kind              (str, optional, default "sudden")
-#   transition_rounds (int, optional, default 10; only used for "gradual")
-drift:
+  dirichlet_alpha: 0.5
+  observations_per_client: null
+  seed: null
+poisoning:
+  seed: null
+  fraction_malicious: 0.0
+  events: []
+data_drift:
   seed: null
   events: []
+defense:
+  mode: none
+  clip_multiplier: 1.5
+  root_frac: 0.12
+  caga_tol_z: 2.0
+  caga_tol_abs: 0.0001
+  caga_tol_rel: 0.0
+  caga_probe_size: 4000
+  caga_gate_blocks: true
+  caga_final_check: true
+  caga_max_sweeps: 2
+  caga_max_rel_increase: 0.1
+  root_device: cpu
+plotting:
+  enabled: true
+  save_dir: ./plots
+  show: true
+perf:
+  dense_adj: false
+  fast_negatives: false
+  actor_cache: false

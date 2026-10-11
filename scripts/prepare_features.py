@@ -1,4 +1,3 @@
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportUnnecessaryComparison=false, reportAttributeAccessIssue=false
 import pandas as pd
 import numpy as np
 import torch
@@ -6,7 +5,7 @@ from rdkit import Chem, RDLogger
 from rdkit.Chem import Descriptors
 from rdkit.Chem import rdFingerprintGenerator
 
-# Suppress RDKit logs
+
 RDLogger.DisableLog("rdApp.*")
 import os
 import sys
@@ -41,13 +40,13 @@ def get_rdkit_features(
     if mol is None:  # type: ignore
         return None, None
 
-    # Morgan Fingerprint using MorganGenerator
+
     gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
     fp = gen.GetFingerprint(mol)
     fp_arr = np.zeros((0,), dtype=np.float32)
     Chem.DataStructs.ConvertToNumpyArray(fp, fp_arr)
 
-    # RDKit Descriptors
+
     desc = [
         Descriptors.MolWt(mol),
         Descriptors.MolLogP(mol),
@@ -67,18 +66,18 @@ def main():
     parser.add_argument("--out_file", type=str, default="./data/ogbl_ddi/features.pt")
     args = parser.parse_args()
 
-    # Load dataset to get num_nodes and edge_index
+
     data, _ = load_dataset(args.data_dir)
     num_nodes = data.num_nodes
     assert num_nodes is not None
 
-    # Load mapping
+
     mapping_path = os.path.join(
         args.data_dir, "ogbl_ddi", "mapping", "nodeidx2drugid.csv.gz"
     )
     mapping_df = pd.read_csv(mapping_path)
 
-    # Download SMILES
+
     smiles_dict = download_smiles()
 
     morgan_list: list[np.ndarray] = []
@@ -106,10 +105,10 @@ def main():
     morgan_feat = torch.tensor(np.stack(morgan_list))
     rdkit_feat = torch.tensor(np.stack(rdkit_list))
 
-    # Normalize RDKit descriptors
+
     rdkit_feat = (rdkit_feat - rdkit_feat.mean(dim=0)) / (rdkit_feat.std(dim=0) + 1e-8)
 
-    # Compute topological features
+
     assert data.edge_index is not None
     topo_feat = compute_topo_features(data.edge_index, num_nodes)
 

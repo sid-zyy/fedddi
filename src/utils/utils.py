@@ -1,9 +1,4 @@
-"""
-src/utils/utils.py
-──────────────────
-Shared utility functions: seeding, device selection, logging setup,
-results formatting.
-"""
+"""Shared utility functions: seeding, device selection, logging setup, results formatting."""
 
 from __future__ import annotations
 
@@ -15,10 +10,6 @@ from typing import Dict, List
 import numpy as np
 import torch
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Reproducibility
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 def seed_everything(seed: int) -> None:
     """Set all relevant random seeds for reproducibility."""
@@ -26,34 +17,26 @@ def seed_everything(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)  # type: ignore
     torch.cuda.manual_seed_all(seed)
-    # Deterministic CUDA ops (slight performance cost)
+
     os.environ["PYTHONHASHSEED"] = str(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Device
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def get_device(cfg_device: str = "cuda") -> torch.device:
-    """Return the best available device, falling back to CPU if CUDA absent."""
+    """Return the best available device, falling back to MPS or CPU."""
     if cfg_device == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
     else:
         device = torch.device("cpu")
         if cfg_device == "cuda":
             logging.getLogger(__name__).warning(
-                "CUDA requested but not available — using CPU."
+                "CUDA requested but not available — using CPU/MPS fallback."
             )
     logging.getLogger(__name__).info("Using device: %s", device)
     return device
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Logging
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -66,26 +49,8 @@ def setup_logging(level: str = "INFO") -> None:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Results formatting
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def pretty_results(results: List[Dict[str, float]]) -> str:
-    """Format a list of per-run result dicts into a publication-ready table.
-
-    Example output
-    ──────────────
-    ┌─────┬────────────────┬─────────────────────────┐
-    │ Run │  Val Hits@20   │    Test Hits@20          │
-    ├─────┼────────────────┼─────────────────────────┤
-    │   0 │         0.8231 │                  0.8105  │
-    │   1 │         0.8445 │                  0.8312  │
-    …
-    │MEAN │         0.8239 │                  0.8239  │
-    │ STD │         0.0200 │                  0.0437  │
-    └─────┴────────────────┴─────────────────────────┘
-    """
+    """Format a list of per-run result dicts into a publication-ready table"""
     lines = [
         "┌─────┬────────────────┬──────────────────────────┐",
         "│ Run │  Val Hits@20   │  Test Hits@20 (@ best val)│",

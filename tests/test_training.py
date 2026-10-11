@@ -1,9 +1,4 @@
-# pyright: reportMissingParameterType=false, reportUnknownParameterType=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
-"""
-tests/test_training.py
-──────────────────────
-Integration tests for training loop and evaluation.
-"""
+"""Integration tests for training loop and evaluation."""
 
 from __future__ import annotations
 

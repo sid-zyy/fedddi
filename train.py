@@ -1,49 +1,4 @@
-"""
-train.py
-────────
-Main entry point for the FedDDI centralized baseline.
-GraphSAGE encoder + NeuralLinkPredictor (Hadamard MLP decoder).
-
-Usage
-─────
-  python train.py                                    # Mode A: learned embedding (default)
-  python train.py baseline.use_fixed_features=true   # Mode B: fixed features (matches FL)
-  python train.py model.hidden_dim=512               # override any param
-  python train.py training.num_runs=10               # 10 seeds for leaderboard
-  python train.py wandb.mode=disabled                # disable W&B
-
-Baseline modes
-──────────────
-  A) Learned embedding  (default, baseline.use_fixed_features=false)
-     Uses nn.Embedding(num_nodes, hidden_dim). Standard ogbl-ddi leaderboard
-     setup; cannot be directly federated (per-client embeddings live in
-     orthogonal spaces, so FedAvg aggregation is meaningless).
-
-  B) Fixed global features  (baseline.use_fixed_features=true)
-     Uses the SAME compute_fixed_global_features() call as main_fl.py
-     (Strategy 1): degree + BFS anchor distances + spectral eigenvectors,
-     projected via a shared Linear(feat_dim → hidden_dim). This is the
-     MATCHED CENTRALIZED BASELINE: comparing its Hits@20 against the
-     federated number isolates the true cost of federation.
-
-  Both modes evaluate using train edges only for message-passing (matching
-  ogbl-ddi leaderboard convention).
-
-Paper comparison table:
-  | Setting                         | Val Hits@20   |
-  |---------------------------------|---------------|
-  | Centralized — learned embedding |  TBD          |  (Mode A)
-  | Centralized — fixed features    |  TBD          |  (Mode B)
-  | Federated   — fixed features    |  TBD          |  (main_fl.py)
-
-Design
-──────
-For each of the `training.num_runs` independent runs:
-  1. Re-seed all RNGs with (base_seed + run_id).
-  2. Re-initialise encoder and predictor (fresh random weights).
-  3. Run Trainer.train() → returns best val / corresponding test Hits@20.
-  4. Log summary to wandb and print results table.
-"""
+"""Main entry point for the FedDDI centralized baseline"""
 
 from __future__ import annotations
 
@@ -82,23 +37,23 @@ def main(cfg: DictConfig) -> None:
     edge_index = data.edge_index.to(device)
     num_nodes: int = data.num_nodes
 
-    # ── Node feature strategy ─────────────────────────────────────────────────
-    # baseline.use_fixed_features=true  →  Mode B: same fixed features as FL
-    # baseline.use_fixed_features=false →  Mode A: learned embedding (default)
+
+
+
     baseline_cfg = cfg.get("baseline", {})
     use_fixed_features: bool = bool(baseline_cfg.get("use_fixed_features", False))
 
     node_features = None
 
     if use_fixed_features:
-        # ── Mode B: fixed global features (matches main_fl.py Strategy 1) ────
-        feat_cfg = cfg.dataset.get("fixed_features", {})
-        num_anchors_feat  = int(feat_cfg.get("num_anchors",  64))
-        num_spectral_feat = int(feat_cfg.get("num_spectral", 32))
+
+        feat_cfg = cfg.get("fixed_features", {})
+        num_anchors_feat  = int(feat_cfg.get("num_anchors",  32))
+        num_spectral_feat = int(feat_cfg.get("num_spectral", 16))
 
         logger.info(
             "Mode B (matched baseline): computing fixed global features "
-            "(anchors=%d, spectral=%d) — same as main_fl.py Strategy 1 ...",
+            "(anchors=%d, spectral=%d) ...",
             num_anchors_feat, num_spectral_feat,
         )
         node_features = compute_fixed_global_features(
@@ -116,7 +71,7 @@ def main(cfg: DictConfig) -> None:
         wandb_tags  = list(cfg.wandb.tags) + ["mode-b-fixed-features", "matched-baseline"]
 
     elif cfg.dataset.get("use_features", False) and cfg.dataset.get("feature_types", []):
-        # ── Legacy path: pre-computed features from features.pt ──────────────
+
         import os
         feat_path = os.path.join(cfg.dataset.root, "ogbl_ddi", "features.pt")
         if os.path.exists(feat_path):
@@ -139,7 +94,7 @@ def main(cfg: DictConfig) -> None:
         wandb_tags  = list(cfg.wandb.tags) + ["legacy-features"]
 
     else:
-        # ── Mode A: learned embedding (default) ───────────────────────────────
+
         logger.info(
             "Mode A (learned embedding): using nn.Embedding — "
             "not directly comparable to the federated fixed-feature model. "
@@ -185,7 +140,7 @@ def main(cfg: DictConfig) -> None:
             hidden_dim=cfg.predictor.hidden_dim,
             num_layers=cfg.predictor.num_layers,
             dropout=cfg.predictor.dropout,
-            dist_dim=0,  # Distance encoding disabled for centralized baseline
+            dist_dim=0,
         )
 
         _log_param_counts(encoder, predictor)
@@ -199,10 +154,20 @@ def main(cfg: DictConfig) -> None:
             cfg=cfg,
             device=device,
             run_id=run_id,
-            node_dist_enc=None,  # No distance encoding features
+            node_dist_enc=None,
         )
         result = trainer.train()
         all_results.append(result)
+
+        plotting_cfg = cfg.get("plotting", None)
+        if plotting_cfg and plotting_cfg.get("enabled", True):
+            from src.utils.plotting import plot_centralized_run
+            plot_centralized_run(
+                history=result["history"],
+                run_id=run_id,
+                save_dir=plotting_cfg.get("save_dir", "./plots"),
+                show=plotting_cfg.get("show", True),
+            )
 
         wandb.log(
             {
@@ -219,6 +184,16 @@ def main(cfg: DictConfig) -> None:
 
     mean_val, std_val = float(np.mean(vals)), float(np.std(vals))
     mean_test, std_test = float(np.mean(tests)), float(np.std(tests))
+
+    plotting_cfg = cfg.get("plotting", None)
+    if plotting_cfg and plotting_cfg.get("enabled", True):
+        from src.utils.plotting import plot_centralized_summary
+        histories = [r["history"] for r in all_results if "history" in r]
+        plot_centralized_summary(
+            all_runs_history=histories,
+            save_dir=plotting_cfg.get("save_dir", "./plots"),
+            show=plotting_cfg.get("show", True),
+        )
 
     logger.info("\n%s", pretty_results(all_results))
     logger.info(

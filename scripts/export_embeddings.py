@@ -1,13 +1,4 @@
-"""
-scripts/export_embeddings.py
-────────────────────────────
-Export trained node embeddings to numpy for downstream analysis.
-
-Usage
-─────
-  python scripts/export_embeddings.py checkpoint=./checkpoints/best_run0.pt
-  python scripts/export_embeddings.py checkpoint=./checkpoints/best_run0.pt output=./embeddings.npy
-"""
+"""Export trained node embeddings to numpy for downstream analysis"""
 
 from __future__ import annotations
 
@@ -39,7 +30,7 @@ def main(cfg: DictConfig) -> None:
         output = "embeddings.npy"
 
     if checkpoint is None:
-        logger.error("Specify: python scripts/export_embeddings.py checkpoint=PATH")
+        logger.error("Specify: python scripts/export_embeddings.py +checkpoint=PATH")
         sys.exit(1)
 
     device = get_device(cfg.device)

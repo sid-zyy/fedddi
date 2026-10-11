@@ -1,28 +1,4 @@
-"""
-src/data/dataset.py
-───────────────────
-OGB dataset loading and split utilities for ogbl-ddi.
-
-The ogbl-ddi graph:
-  • 4,267 nodes  (drug entities, no input node features)
-  • 1,334,889 edges
-  • Task: predict drug–drug interactions (Hits@20)
-
-Compatibility fix (PyTorch >= 2.6)
-───────────────────────────────────
-PyTorch 2.6+ changed torch.load default to weights_only=True.
-OGB's dataset_pyg.py uses torch.load without that flag, causing
-UnpicklingError. _patch_ogb_torch_load() patches OGB in-place using a
-paren-aware scanner (not regex) so weights_only=False is correctly placed
-AFTER the closing paren of any nested call like osp.join(...).
-
-Handles all three possible states of the OGB file:
-  1. Unpatched   — adds weights_only=False
-  2. Broken patch — weights_only was put INSIDE osp.join args, fixes it
-  3. Correct      — leaves it unchanged
-
-Runs automatically on import. Safe and idempotent.
-"""
+"""OGB dataset loading and split utilities for ogbl-ddi"""
 
 from __future__ import annotations
 
@@ -40,18 +16,8 @@ from torch_geometric.utils import to_undirected  # type: ignore
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PyTorch >= 2.6 compatibility patch
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def _find_torch_load_calls(src: str) -> List[Tuple[int, int, str]]:
-    """Return list of (start, end, inner_args) for every torch.load(...) call.
-
-    Uses a character-by-character paren counter so nested calls like
-    torch.load(osp.join(a, b)) are handled correctly — the regex approach
-    fails here because [^)]+ stops at the first ) it sees.
-    """
+    """Return list of (start, end, inner_args) for every torch.load(...) call"""
     results: List[Tuple[int, int, str]] = []
     i = 0
     needle = "torch.load("
@@ -76,40 +42,34 @@ def _find_torch_load_calls(src: str) -> List[Tuple[int, int, str]]:
 
 
 def _patch_ogb_torch_load() -> None:
-    """Patch OGB's dataset_pyg.py so every torch.load uses weights_only=False.
-
-    Two-pass approach:
-      Pass 1 — fix broken patches: remove weights_only from inside nested args,
-               place it correctly after torch.load's own closing paren.
-      Pass 2 — add weights_only=False to any call that still lacks it.
-    """
+    """Patch OGB's dataset_pyg.py so every torch.load uses weights_only=False"""
     try:
         import ogb.linkproppred.dataset_pyg as _ogb_mod  # type: ignore
     except ImportError:
-        return  # will fail later with a clear ImportError
+        return
 
     ogb_path = inspect.getfile(_ogb_mod)
 
-    with open(ogb_path, "r") as f:
+    with open(ogb_path, "r", encoding="utf-8") as f:
         src = f.read()
 
     original = src
 
-    # ── Pass 1: fix broken state (weights_only mistakenly inside nested args)
+
     calls = _find_torch_load_calls(src)
     for start, end, inner in reversed(calls):
         if ", weights_only=False" in inner:
             clean = inner.replace(", weights_only=False", "")
             src = src[:start] + f"torch.load({clean}, weights_only=False)" + src[end:]
 
-    # ── Pass 2: add weights_only=False where still missing
+
     calls = _find_torch_load_calls(src)
     for start, end, inner in reversed(calls):
         if "weights_only" not in inner:
             src = src[:start] + f"torch.load({inner}, weights_only=False)" + src[end:]
 
     if src != original:
-        with open(ogb_path, "w") as f:
+        with open(ogb_path, "w", encoding="utf-8") as f:
             f.write(src)
         count = src.count("weights_only=False")
         logger.debug(
@@ -125,19 +85,11 @@ def _clear_ogb_cache(root: str) -> None:
         logger.debug("Cleared OGB cache: %s", processed)
 
 
-# Apply patch immediately on import
 _patch_ogb_torch_load()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Public API
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def load_dataset(root: str = "./data") -> Tuple[Data, Evaluator]:
-    """Download (if needed) and return the ogbl-ddi PyG Data object and
-    the official OGB evaluator.
-    """
+    """Download (if needed) and return the ogbl-ddi PyG Data object and the official OGB evaluator."""
     logger.info("Loading ogbl-ddi dataset from '%s' ...", root)
     _patch_ogb_torch_load()
 
@@ -167,15 +119,7 @@ def load_dataset(root: str = "./data") -> Tuple[Data, Evaluator]:
 
 
 def get_edge_split(root: str = "./data") -> Dict[str, Dict[str, torch.Tensor]]:
-    """Return the official OGB train / valid / test edge splits.
-
-    Structure:
-        split["train"]["edge"]        — [N_train, 2] positive edges
-        split["valid"]["edge"]        — [N_valid, 2] positive edges
-        split["valid"]["edge_neg"]    — [N_valid, 2] negative edges
-        split["test"]["edge"]         — [N_test,  2] positive edges
-        split["test"]["edge_neg"]     — [N_test,  2] negative edges
-    """
+    """Return the official OGB train / valid / test edge splits"""
     _patch_ogb_torch_load()
 
     try:
