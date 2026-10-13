@@ -137,6 +137,24 @@ Joint condition with severe drift, 2 seeds, test Hits@20 over rounds 31–40:
 - [x] **Block-gating ablation** (`caga_noblock`): inconclusive at 2 seeds; revisit with a third seed during tuning.
 - [x] **Joint condition with severe drift:** CAGA 0.156, FLTrust 0.116, norm clip 0.082, FedAvg 0.077 (2 seeds). Gate passed at pilot level.
 - [x] **Shared training settings** (CPU scale, 2026-10-13): grid of lr {0.001, 0.003, 0.01} × local epochs {1, 2, 4} on clean FedAvg, tuning seeds 10–11, validation Hits@20 over rounds 31–40. Chosen: **lr 0.003, 2 local epochs** (0.126). It tied lr 0.001 with 1 epoch (0.126), but was still improving (+0.024 over the previous 10 rounds, against +0.008), which matters for the 100-round protocol. It also reached a lower training loss and matches every earlier pilot run. lr 0.01 was unstable. **More local epochs lowered training loss but hurt validation:** 4 epochs was worst at lr 0.003 (0.079). The GPU protocol's 5 local epochs take a similar number of optimizer steps per round, so check 2 vs. 5 local epochs in the GPU validation runs.
+- [ ] **CAGA tuning, interim (2026-10-13).** Joint condition with severe drift, seeds 10–11, validation Hits@20 over rounds 31–40:
+
+  | Setting | Val (seed 10 / 11) | Mean | Honest fully accepted, pre / post onset | Poisoned / drifted accepted post onset |
+  | --- | --- | --- | --- | --- |
+  | `tol_z` 1 | 0.129 / 0.174 | 0.151 | 9% / 55% | 0% / 1% |
+  | Warm-up 5 | 0.140 / 0.134 | 0.137 | 64% / 79% | 1% / 5% |
+  | Warm-up 10 | 0.132 / 0.137 | 0.135 | 94% / 87% | 4% / 7% |
+  | `tol_rel` 0.1 | 0.151 / 0.108 | 0.130 | 82% / 99% | 8% / 37% |
+  | `tol_z` 3 | 0.114 / 0.131 | 0.123 | 55% / 86% | 5% / 4% |
+  | No block gating | 0.119 / 0.101 | 0.110 | 64% / 83% | 5% / 13% |
+  | Defaults | 0.124 / 0.081 | 0.102 | 27% / 71% | 3% / 3% |
+
+  FedAvg on seed 10 scored 0.120, and norm clipping at multiplier 1.0 scored 0.144; the seed-11 baselines are still running. **On these seeds the default CAGA did not beat FedAvg**, unlike on seeds 0–1. Seed-to-seed gaps reach 0.045, so differences under about 0.02 are noise.
+
+  Leading candidate: **warm-up 5**. It improved both seeds, is the most consistent, and fixes the documented failure (honest clients fully accepted before onset went from 27% to 64%) while still catching attacked clients. `tol_z` 1 had the highest mean but gates honest clients heavily (55% fully accepted after onset), had the largest seed gap, and spiked training loss to 1.67. `tol_rel` 0.1 let drifted clients through in 37% of rounds. Warm-up assumes attacks do not start in the first rounds; test an attack from round 1 before the paper.
+
+  Block gating across 4 seeds (CAGA minus no-block): +0.029, −0.006, +0.005, −0.020, mean about 0, and no-block rounds are about 35% faster. Confirmation running: warm-up 5 without block gating on seeds 10–11.
+
 - [ ] **CAGA tuning** on separate tuning seeds, validation Hits@20 only: `tol_z`, `tol_rel`, probe size, and possibly a no-gating warm-up. Targets: false gating of honest clients early in training, and the clean-vs-attacked gap.
 - [ ] **Baseline tuning** with a comparable budget: norm clip multiplier, FLTrust root sample size.
 - [ ] **Freeze** settings and write the pass criteria here before the GPU matrix.

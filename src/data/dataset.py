@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import inspect
+import contextlib
 import logging
-import os
-import shutil
 from typing import Dict, List, Tuple, cast, Any
 
 import torch
@@ -16,93 +14,33 @@ from torch_geometric.utils import to_undirected  # type: ignore
 logger = logging.getLogger(__name__)
 
 
-def _find_torch_load_calls(src: str) -> List[Tuple[int, int, str]]:
-    """Return list of (start, end, inner_args) for every torch.load(...) call"""
-    results: List[Tuple[int, int, str]] = []
-    i = 0
-    needle = "torch.load("
-    while i < len(src):
-        idx = src.find(needle, i)
-        if idx == -1:
-            break
-        depth = 0
-        j = idx + len(needle)
-        start_inner = j
-        while j < len(src):
-            if src[j] == "(":
-                depth += 1
-            elif src[j] == ")":
-                if depth == 0:
-                    results.append((idx, j + 1, src[start_inner:j]))
-                    break
-                depth -= 1
-            j += 1
-        i = idx + 1
-    return results
+@contextlib.contextmanager
+def _trusted_ogb_load():
+    """Let OGB's own torch.load calls unpickle its processed dataset files.
 
+    PyTorch >= 2.6 defaults torch.load to weights_only=True, which rejects the PyG objects OGB
+    caches. These files are produced locally by OGB from the official download, so inside this
+    block torch.load defaults to weights_only=False. Callers that pass weights_only explicitly
+    are unaffected, and the original function is restored on exit.
+    """
+    original = torch.load
 
-def _patch_ogb_torch_load() -> None:
-    """Patch OGB's dataset_pyg.py so every torch.load uses weights_only=False"""
+    def load(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("weights_only", False)
+        return original(*args, **kwargs)
+
+    torch.load = load  # type: ignore[assignment]
     try:
-        import ogb.linkproppred.dataset_pyg as _ogb_mod  # type: ignore
-    except ImportError:
-        return
-
-    ogb_path = inspect.getfile(_ogb_mod)
-
-    with open(ogb_path, "r", encoding="utf-8") as f:
-        src = f.read()
-
-    original = src
-
-
-    calls = _find_torch_load_calls(src)
-    for start, end, inner in reversed(calls):
-        if ", weights_only=False" in inner:
-            clean = inner.replace(", weights_only=False", "")
-            src = src[:start] + f"torch.load({clean}, weights_only=False)" + src[end:]
-
-
-    calls = _find_torch_load_calls(src)
-    for start, end, inner in reversed(calls):
-        if "weights_only" not in inner:
-            src = src[:start] + f"torch.load({inner}, weights_only=False)" + src[end:]
-
-    if src != original:
-        with open(ogb_path, "w", encoding="utf-8") as f:
-            f.write(src)
-        count = src.count("weights_only=False")
-        logger.debug(
-            "OGB patched — %d torch.load call(s) updated in %s", count, ogb_path
-        )
-
-
-def _clear_ogb_cache(root: str) -> None:
-    """Delete OGB processed cache so it regenerates with the patched loader."""
-    processed = os.path.join(root, "ddi", "processed")
-    if os.path.isdir(processed):
-        shutil.rmtree(processed)
-        logger.debug("Cleared OGB cache: %s", processed)
-
-
-_patch_ogb_torch_load()
+        yield
+    finally:
+        torch.load = original  # type: ignore[assignment]
 
 
 def load_dataset(root: str = "./data") -> Tuple[Data, Evaluator]:
     """Download (if needed) and return the ogbl-ddi PyG Data object and the official OGB evaluator."""
     logger.info("Loading ogbl-ddi dataset from '%s' ...", root)
-    _patch_ogb_torch_load()
-
-    try:
+    with _trusted_ogb_load():
         dataset = PygLinkPropPredDataset(name="ogbl-ddi", root=root)
-    except Exception as e:
-        if "weights_only" in str(e) or "Unpickling" in type(e).__name__:
-            logger.warning("torch.load failed — clearing cache and retrying ...")
-            _clear_ogb_cache(root)
-            _patch_ogb_torch_load()
-            dataset = PygLinkPropPredDataset(name="ogbl-ddi", root=root)
-        else:
-            raise
 
     data = cast(Data, dataset[0])
     edge_index = cast(torch.Tensor, data.edge_index)
@@ -120,24 +58,11 @@ def load_dataset(root: str = "./data") -> Tuple[Data, Evaluator]:
 
 def get_edge_split(root: str = "./data") -> Dict[str, Dict[str, torch.Tensor]]:
     """Return the official OGB train / valid / test edge splits"""
-    _patch_ogb_torch_load()
-
-    try:
+    with _trusted_ogb_load():
         dataset = PygLinkPropPredDataset(name="ogbl-ddi", root=root)
         split = cast(
             Dict[str, Dict[str, torch.Tensor]], cast(Any, dataset).get_edge_split()
         )
-    except Exception as e:
-        if "weights_only" in str(e) or "Unpickling" in type(e).__name__:
-            logger.warning("torch.load failed — clearing cache and retrying ...")
-            _clear_ogb_cache(root)
-            _patch_ogb_torch_load()
-            dataset = PygLinkPropPredDataset(name="ogbl-ddi", root=root)
-            split = cast(
-                Dict[str, Dict[str, torch.Tensor]], cast(Any, dataset).get_edge_split()
-            )
-        else:
-            raise
 
     logger.info(
         "Edge split — train: %d, valid: %d (neg %d), test: %d (neg %d)",
