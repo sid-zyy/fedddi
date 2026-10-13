@@ -356,6 +356,7 @@ def main(cfg: DictConfig) -> None:
     seed_everything(cfg.training.seed)
     device = get_device(cfg.device)
     local_epochs = cfg.get('local_epochs', 10)
+    round_lr_decay = bool(cfg.training.get('round_lr_decay', False))
     num_rounds = cfg.get('num_rounds', 50)
     fl_cfg = cfg.get('fl', OmegaConf.create({}))
     algorithm = str(fl_cfg.get('algorithm', 'fedavg')).lower()
@@ -572,7 +573,8 @@ def main(cfg: DictConfig) -> None:
             device=_root_device,
             algorithm=algorithm,
             mu=mu,
-            num_rounds=num_rounds
+            num_rounds=num_rounds,
+            round_lr_decay=round_lr_decay
         )
 
         # The server trains on a fresh client-sized sample of root edges each round and takes as many steps
@@ -760,7 +762,8 @@ def main(cfg: DictConfig) -> None:
             num_rounds=num_rounds,
             c_id_int=c_id_int,
             poisoning_simulator=poisoning_simulator,
-            data_drift_simulator=data_drift_simulator
+            data_drift_simulator=data_drift_simulator,
+            round_lr_decay=round_lr_decay
         ).to_client()
     client_app = ClientApp(client_fn=client_fn)
     try:

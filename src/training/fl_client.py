@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -18,6 +19,16 @@ logger = logging.getLogger(__name__)
 
 _ENCODER_AGG_KEYS = frozenset(["convs", "feature_proj"])
 _PREDICTOR_AGG_KEYS = frozenset(["mlp"])
+
+
+def round_lr_factor(server_round: int, epoch_in_round: int, local_epochs: int, num_rounds: int,
+                    floor: float = 0.05) -> float:
+    """Cosine learning-rate factor over the whole run, from 1.0 at the first local epoch of round 1 to
+    `floor` after the last epoch of the last round. Each round continues where the previous one ended.
+    """
+    total = max(num_rounds * local_epochs, 1)
+    t = min(max(server_round - 1, 0) * local_epochs + epoch_in_round, total)
+    return floor + (1.0 - floor) * 0.5 * (1.0 + math.cos(math.pi * t / total))
 
 
 def _is_aggregated_encoder_param(name: str) -> bool:
@@ -44,6 +55,7 @@ class FedDDIClient(NumPyClient):
         c_id_int: Optional[int] = None,
         poisoning_simulator: Optional[object] = None,
         data_drift_simulator: Optional[object] = None,
+        round_lr_decay: bool = False,
     ):
         self.cid = cid
         self.trainer = trainer
@@ -52,6 +64,9 @@ class FedDDIClient(NumPyClient):
         self.algorithm = algorithm.lower()
         self.mu = mu
         self.num_rounds = num_rounds
+        # Without this, every round restarts the learning rate at its base value, so it never decays
+        # across the run and late rounds keep taking full-size steps.
+        self.round_lr_decay = round_lr_decay
 
 
 
@@ -229,9 +244,16 @@ class FedDDIClient(NumPyClient):
         for param_group in self.trainer.optimizer.param_groups:
             param_group["lr"] = self.trainer.cfg.training.lr
 
-        self.trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.trainer.optimizer, T_max=max(self.num_rounds * self.local_epochs, 1)
-        )
+        if getattr(self, "round_lr_decay", False):
+            rnd = int(config.get("server_round", 1))
+            self.trainer.scheduler = torch.optim.lr_scheduler.LambdaLR(
+                self.trainer.optimizer,
+                lambda k: round_lr_factor(rnd, k, self.local_epochs, self.num_rounds),
+            )
+        else:
+            self.trainer.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.trainer.optimizer, T_max=max(self.num_rounds * self.local_epochs, 1)
+            )
 
         original_epochs = self.trainer.cfg.training.epochs
         self.trainer.cfg.training.epochs = self.local_epochs

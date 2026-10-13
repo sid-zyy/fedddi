@@ -62,6 +62,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=8192)
     p.add_argument("--lr", type=float, default=0.003)
     p.add_argument("--poison-strength", choices=("moderate", "strong"), default="moderate")
+    p.add_argument("--extra-poisoned", type=int, nargs="*", default=[],
+                   help="More poisoned clients; each copies the protocol's poison events in turn.")
+    p.add_argument("--no-boost", action="store_true", help="Poisoned clients send normal-size updates.")
+    p.add_argument("--round-lr-decay", action="store_true", help="Cosine learning-rate decay across rounds.")
+    p.add_argument("--lie-clients", type=int, nargs="*", default=[],
+                   help="Clients running the 'A Little Is Enough' attack from --attack-start onwards.")
     p.add_argument("--root-frac", type=float, default=0.12)
     p.add_argument("--probe-size", type=int, default=4000)
     p.add_argument("--caga-tol-z", type=float, default=2.0)
@@ -104,12 +110,47 @@ def build_events(a: argparse.Namespace):
                           emerge=s.get("emerge", {}), kind=s.get("kind", "sudden"),
                           transition_rounds=s.get("transition_rounds", 10), update_scale=s.get("update_scale", 1.0))
               for s in poison_specs[pk]]
+    if poison:
+        base = list(poison)
+        taken = {e.client_id for e in base} | {s["client_id"] for s in drift_specs[dk]}
+        for i, cid in enumerate(a.extra_poisoned):
+            if cid in taken:
+                raise ValueError(f"client {cid} is already poisoned or drifted")
+            src = base[i % len(base)]
+            poison.append(PoisonEvent(client_id=cid, start_round=src.start_round, suppress=dict(src.suppress),
+                                      emerge=dict(src.emerge), kind=src.kind, transition_rounds=src.transition_rounds,
+                                      update_scale=src.update_scale))
+            taken.add(cid)
+        if a.no_boost:
+            for e in poison:
+                e.update_scale = 1.0
     drift = [FeatureDriftEvent(client_id=s["client_id"], start_round=s["start_round"], feature_dims=s["feature_dims"],
                                shift_magnitude=s["shift_magnitude"], noise_std=s["noise_std"],
                                target_node_frac=s["target_node_frac"], node_selection=s["node_selection"],
                                kind=s["kind"], transition_rounds=s.get("transition_rounds", 10))
              for s in drift_specs[dk]]
     return poison, drift
+
+
+def lie_z(n: int, m: int) -> float:
+    """Baruch et al. (2019): the largest shift that keeps the attackers inside the honest majority."""
+    from scipy.stats import norm
+    s = n // 2 + 1 - m
+    if s < 1:
+        raise ValueError(f"A Little Is Enough needs fewer than half the clients; got {m} of {n}")
+    return float(norm.ppf((n - s) / n))
+
+
+def lie_updates(params: List[np.ndarray], client_arrays: List[List[np.ndarray]], lie: List[int], n: int) -> None:
+    """Replace each attacker's parameters with old + mean - z * std of the other clients' updates,
+    coordinate by coordinate (an omniscient attacker, as in the original paper)."""
+    z = lie_z(n, len(lie))
+    others = [k for k in range(n) if k not in lie]
+    for li, old in enumerate(params):
+        d = np.stack([client_arrays[k][li].astype(np.float64) - old for k in others])
+        mal = (old + d.mean(axis=0) - z * d.std(axis=0)).astype(old.dtype)
+        for k in lie:
+            client_arrays[k][li] = mal.copy()
 
 
 def mean_over(reports: List[Dict[str, Any]], key: str) -> Optional[float]:
@@ -166,7 +207,7 @@ def main() -> None:
     drift_sim = DataDriftSimulator(node_features=node_features, num_clients=a.num_clients, events=drift_events,
                                    seed=a.seed) if drift_events else None
     clients = [FedDDIClient(cid=str(i), trainer=trainer_for(i, datasets[i].edges), local_epochs=a.local_epochs,
-                            device=device, num_rounds=a.rounds, c_id_int=i, poisoning_simulator=poison_sim,
+                            device=device, num_rounds=a.rounds, round_lr_decay=a.round_lr_decay, c_id_int=i, poisoning_simulator=poison_sim,
                             data_drift_simulator=drift_sim) for i in range(a.num_clients)]
     special = sorted({e.client_id for e in poison_events} | {e.client_id for e in drift_events})
 
@@ -178,7 +219,7 @@ def main() -> None:
     if uses_root:
         root_trainer = trainer_for(-1, root_edges)
         root_client = FedDDIClient(cid="-1", trainer=root_trainer, local_epochs=a.local_epochs, device=device,
-                                   num_rounds=a.rounds)
+                                   num_rounds=a.rounds, round_lr_decay=a.round_lr_decay)
         block_map = compute_block_index_map(root_trainer.encoder, root_trainer.predictor)
 
     params = eval_client.get_parameters({})
@@ -188,9 +229,12 @@ def main() -> None:
     for rnd in range(1, a.rounds + 1):
         t0 = time.time()
         fits = [c.fit(params, {"server_round": rnd}) for c in clients]
-        client_arrays = [f[0] for f in fits]
+        client_arrays = [list(f[0]) for f in fits]
+        if a.lie_clients and rnd >= a.attack_start:
+            lie_updates(params, client_arrays, a.lie_clients, a.num_clients)
         weights = [float(f[1]) for f in fits]
-        row: Dict[str, Any] = {"round": rnd, "train_loss": float(np.mean([f[2]["loss"] for f in fits]))}
+        row: Dict[str, Any] = {"round": rnd, "train_loss": float(np.mean([f[2]["loss"] for f in fits])),
+                               "client_losses": json.dumps([round(float(f[2]["loss"]), 4) for f in fits])}
 
         if a.method in ("fltrust", "fedavg_root"):
             # The server trains on a fresh client-sized sample of root edges, taking as many optimizer

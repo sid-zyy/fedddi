@@ -33,6 +33,8 @@ training:
   save_dir: ./checkpoints
   seed: 0
   grad_clip: 1.0
+  # Cosine learning-rate decay across federated rounds (otherwise each round restarts at lr).
+  round_lr_decay: false
 wandb:
   mode: disabled
   project: fedddi-gnn

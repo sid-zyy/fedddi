@@ -1,9 +1,10 @@
 #!/bin/bash
 # GPU checks for a Kaggle notebook (GPU T4, Internet on). Run from the repository root:
-#   bash scripts/kaggle_gpu_checks.sh [setup|smoke|epochs]
+#   bash scripts/kaggle_gpu_checks.sh [setup|smoke|epochs|lrdecay]
 # setup:  install dependencies and download ogbl-ddi plus the ATC mapping
 # smoke:  GPU test suite and a 2-round CAGA run (~15 min)
 # epochs: clean FedAvg, 100 rounds, 2 vs. 5 local epochs on tuning seed 10 (a few hours each)
+# lrdecay: the 5-epoch run again with training.round_lr_decay=true (about 2.5 hours), to compare
 # Results go to /kaggle/working/results so they survive the session; download them from the Output tab.
 set -euo pipefail
 OUT=${OUT:-/kaggle/working/results}
@@ -29,7 +30,10 @@ case "${1:-}" in
         +csv_output_dir="$OUT/clean_fedavg_ep$EP" 2>&1 | tee "$OUT/clean_fedavg_ep$EP.log"
     done
     ;;
+  lrdecay)
+    python main_fl.py $COMMON num_rounds=100 local_epochs=5 training.seed=10 training.round_lr_decay=true       +csv_output_dir="$OUT/clean_fedavg_ep5_lrdecay" 2>&1 | tee "$OUT/clean_fedavg_ep5_lrdecay.log"
+    ;;
   *)
-    echo "usage: bash scripts/kaggle_gpu_checks.sh [setup|smoke|epochs]"; exit 1
+    echo "usage: bash scripts/kaggle_gpu_checks.sh [setup|smoke|epochs|lrdecay]"; exit 1
     ;;
 esac
