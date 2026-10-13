@@ -36,6 +36,9 @@ ATTACKS = {
     "testB": ["--cond", "drift", "--lie-clients", "0", "1", "4", "5"],
     "strong": ["--cond", "joint", "--poison-strength", "strong"],
     "clean": ["--cond", "clean"],
+    # Stress tests of A Little Is Enough: fewer attackers, and a larger shift than the paper's z.
+    "testB2": ["--cond", "drift", "--lie-clients", "0", "1"],
+    "testBz2": ["--cond", "drift", "--lie-clients", "0", "1", "4", "5", "--lie-z", "2.0"],
 }
 
 
@@ -76,6 +79,13 @@ def main() -> None:
                        "--lr", "0.003", "--local-epochs", "2", "--device", a.device, "--threads", str(a.threads),
                        "--tag", tag, "--out", a.out] + ATTACKS[atk] + METHODS[m]
                 jobs.append((f"seed{seed}_{tag}", cmd))
+    if a.dataset == "ogbl-ddi" and not a.dry_run:
+        # Fixed features are cached per seed; build them once before parallel runs could race on the cache.
+        for seed in a.seeds:
+            subprocess.check_call([sys.executable, "-c", (
+                "import sys; sys.path.insert(0, 'scripts'); sys.argv = ['x']; import cpu_pilot as c; "
+                "from src.data.dataset import load_dataset; d, _ = load_dataset(root='data'); "
+                f"c.load_features('data', d.edge_index, int(d.num_nodes), {seed})")], cwd=ROOT)
     todo = []
     for name, cmd in jobs:
         # cpu_pilot names its folder <cond>_<method>_seed<seed>_<tag>; the tag and seed identify it.

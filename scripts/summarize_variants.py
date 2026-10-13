@@ -22,6 +22,8 @@ GROUPS = {"moderate": {0: "poisoned", 1: "poisoned", 2: "drifted", 3: "drifted"}
           "strong": {0: "poisoned", 1: "poisoned", 2: "drifted", 3: "drifted"},
           "testA": {0: "poisoned", 1: "poisoned", 4: "poisoned", 5: "poisoned", 2: "drifted", 3: "drifted"},
           "testB": {0: "poisoned", 1: "poisoned", 4: "poisoned", 5: "poisoned", 2: "drifted", 3: "drifted"},
+          "testB2": {0: "poisoned", 1: "poisoned", 2: "drifted", 3: "drifted"},
+          "testBz2": {0: "poisoned", 1: "poisoned", 4: "poisoned", 5: "poisoned", 2: "drifted", 3: "drifted"},
           "clean": {}}
 
 
@@ -29,7 +31,7 @@ def main(folder: str) -> None:
     rows = []
     for f in sorted(glob.glob(os.path.join(folder, "*", "rounds.csv"))):
         name = os.path.basename(os.path.dirname(f))
-        m = re.search(r"_seed(\d+)_(moderate|strong|testA|testB|clean)_(\w+)$", name)
+        m = re.search(r"_seed(\d+)_(moderate|strong|testA|testBz2|testB2|testB|clean)_(\w+)$", name)
         if not m:
             continue
         seed, atk, method = int(m[1]), m[2], m[3]

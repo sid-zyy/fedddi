@@ -70,6 +70,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--round-lr-decay", action="store_true", help="Cosine learning-rate decay across rounds.")
     p.add_argument("--lie-clients", type=int, nargs="*", default=[],
                    help="Clients running the 'A Little Is Enough' attack from --attack-start onwards.")
+    p.add_argument("--lie-z", type=float, default=None,
+                   help="Override the attack's z (default: the paper's value for the number of attackers).")
     p.add_argument("--root-frac", type=float, default=0.12)
     p.add_argument("--probe-size", type=int, default=4000)
     p.add_argument("--caga-tol-z", type=float, default=2.0)
@@ -155,10 +157,11 @@ def lie_z(n: int, m: int) -> float:
     return float(norm.ppf((n - s) / n))
 
 
-def lie_updates(params: List[np.ndarray], client_arrays: List[List[np.ndarray]], lie: List[int], n: int) -> None:
+def lie_updates(params: List[np.ndarray], client_arrays: List[List[np.ndarray]], lie: List[int], n: int,
+                z: Optional[float] = None) -> None:
     """Replace each attacker's parameters with old + mean - z * std of the other clients' updates,
     coordinate by coordinate (an omniscient attacker, as in the original paper)."""
-    z = lie_z(n, len(lie))
+    z = lie_z(n, len(lie)) if z is None else z
     others = [k for k in range(n) if k not in lie]
     for li, old in enumerate(params):
         d = np.stack([client_arrays[k][li].astype(np.float64) - old for k in others])
@@ -259,7 +262,7 @@ def main() -> None:
         fits = [c.fit(params, {"server_round": rnd}) for c in clients]
         client_arrays = [list(f[0]) for f in fits]
         if a.lie_clients and rnd >= a.attack_start:
-            lie_updates(params, client_arrays, a.lie_clients, a.num_clients)
+            lie_updates(params, client_arrays, a.lie_clients, a.num_clients, a.lie_z)
         weights = [float(f[1]) for f in fits]
         row: Dict[str, Any] = {"round": rnd, "train_loss": float(np.mean([f[2]["loss"] for f in fits])),
                                "client_losses": json.dumps([round(float(f[2]["loss"]), 4) for f in fits])}
