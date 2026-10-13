@@ -49,6 +49,17 @@ class CAGAHyperparams:
     # Rounds 1..warmup_rounds use plain weighted averaging. Early in training honest non-IID updates
     # disagree most, and gating them then is mostly false positives.
     warmup_rounds: int = 0
+    # Class-aware probe: a move on client i is judged only on probe samples from the drug classes
+    # client i holds, weighted by its share of each (`sample_weights`). An honest client that
+    # specialises in a few classes is then not penalised for the classes it never trains on.
+    class_aware: bool = False
+    # Reputation: every round, each client's leave-one-out harm on the probe (a z-score, positive =
+    # removing it helps) is folded into a running average; only clients whose average exceeds
+    # `rep_threshold` may be shrunk or dropped. One noisy round can no longer gate an honest client.
+    # The warm-up rounds still update the averages, so evidence builds before gating starts.
+    reputation: bool = False
+    rep_beta: float = 0.7
+    rep_threshold: float = 1.0
 
 
 @dataclass
@@ -59,6 +70,8 @@ class CAGAClientReport:
     block_scale: Dict[str, float]
     loss_delta: float
     verdict: str
+    loo_z: float = 0.0
+    reputation: float = 0.0
 
 
 @dataclass
@@ -81,6 +94,8 @@ class CAGAReport:
             "caga_loss_before": round(self.loss_before, 5),
             "caga_loss_after": round(self.loss_after, 5),
             "caga_final_gamma": round(self.final_gamma, 4),
+            "caga_loo_z": json.dumps([round(c.loo_z, 3) for c in self.clients]),
+            "caga_reputation": json.dumps([round(c.reputation, 3) for c in self.clients]),
         }
 
 
@@ -124,11 +139,23 @@ def select_largest_within_noise(
     return best
 
 
-def _significantly_better(cand: np.ndarray, cur: np.ndarray, tol_z: float, tol_abs: float, min_gain: float = 0.0) -> bool:
-    d = cur - cand
-    n = d.size
-    se = float(d.std(ddof=1) / math.sqrt(n)) if n > 1 else 0.0
-    return float(d.mean()) > tol_z * se + tol_abs + min_gain
+def _paired_z(d: np.ndarray, w: Optional[np.ndarray] = None) -> Tuple[float, float]:
+    """Mean and standard error of a paired difference, optionally weighted per sample (the
+    standard error then uses Kish's effective sample size)."""
+    if w is None or float(w.sum()) <= 0.0:
+        n = d.size
+        return float(d.mean()), (float(d.std(ddof=1) / math.sqrt(n)) if n > 1 else 0.0)
+    p = w / w.sum()
+    mean = float(p @ d)
+    n_eff = 1.0 / float(p @ p)
+    var = float(p @ (d - mean) ** 2) * n_eff / max(n_eff - 1.0, 1.0)
+    return mean, (math.sqrt(var / n_eff) if n_eff > 1 else 0.0)
+
+
+def _significantly_better(cand: np.ndarray, cur: np.ndarray, tol_z: float, tol_abs: float, min_gain: float = 0.0,
+                          w: Optional[np.ndarray] = None) -> bool:
+    mean, se = _paired_z(cur - cand, w)
+    return mean > tol_z * se + tol_abs + min_gain
 
 
 def caga_round(
@@ -140,7 +167,11 @@ def caga_round(
     loss_fn: LossFn,
     hp: CAGAHyperparams,
     server_round: int = 0,
+    sample_weights: Optional[List[Optional[np.ndarray]]] = None,
+    state: Optional[Dict[str, Any]] = None,
 ) -> Tuple[NDArrays, CAGAReport]:
+    """One CAGA aggregation. `sample_weights[i]` (one weight per probe sample) is used when
+    `hp.class_aware`; `state` carries the reputation averages between rounds when `hp.reputation`."""
     n = len(client_arrays)
     all_blocks = list(block_map.keys())
     base_loss_vec = loss_fn(old_arrays)
@@ -166,8 +197,26 @@ def caga_round(
 
     min_gain = hp.tol_rel * abs(base_mean - float(cur.mean())) if hp.tol_rel > 0.0 else 0.0
     warm = server_round <= hp.warmup_rounds
+    wts = [(sample_weights[i] if hp.class_aware and sample_weights is not None else None) for i in range(n)]
 
-    def try_moves(moves: List[List[Dict[str, float]]]) -> bool:
+    loo_z = [0.0] * n
+    rep_now = [0.0] * n
+    eligible = [True] * n
+    if hp.reputation:
+        if state is None:
+            raise ValueError("hp.reputation needs a `state` dict that persists across rounds")
+        book = state.setdefault("reputation", {})
+        for i in range(n):
+            drop = [dict(d) for d in e]
+            drop[i] = {b: 0.0 for b in all_blocks}
+            mean, se = _paired_z(cur - loss_of(drop), wts[i])
+            loo_z[i] = mean / se if se > 0 else 0.0
+            prev = book.get(client_keys[i])
+            book[client_keys[i]] = loo_z[i] if prev is None else hp.rep_beta * prev + (1 - hp.rep_beta) * loo_z[i]
+            rep_now[i] = book[client_keys[i]]
+            eligible[i] = rep_now[i] > hp.rep_threshold
+
+    def try_moves(moves: List[List[Dict[str, float]]], w: Optional[np.ndarray] = None) -> bool:
         """Evaluate candidate scale-states; adopt the best one iff it is significantly better than
         the current aggregate.
         """
@@ -175,7 +224,7 @@ def caga_round(
         best_e, best_l = None, None
         for cand_e in moves:
             l = loss_of(cand_e)
-            if _significantly_better(l, cur if best_l is None else best_l, hp.tol_z, hp.tol_abs, min_gain):
+            if _significantly_better(l, cur if best_l is None else best_l, hp.tol_z, hp.tol_abs, min_gain, w):
                 best_e, best_l = cand_e, l
         if best_e is not None:
             e, cur = best_e, best_l
@@ -188,16 +237,20 @@ def caga_round(
         changed = False
 
         for i in range(n):
+            if not eligible[i]:
+                continue
             cands = []
             for s_ in hp.shrink_grid:
                 if s_ < max(e[i].values()):
                     ce = copy_e()
                     ce[i] = {b: min(e[i][b], s_) for b in all_blocks}
                     cands.append(ce)
-            changed |= try_moves(cands)
+            changed |= try_moves(cands, wts[i])
 
         if hp.gate_blocks:
             for i in range(n):
+                if not eligible[i]:
+                    continue
                 for b in hp.gate_order:
                     cands = []
                     for s_ in hp.shrink_grid:
@@ -205,7 +258,7 @@ def caga_round(
                             ce = copy_e()
                             ce[i][b] = s_
                             cands.append(ce)
-                    changed |= try_moves(cands)
+                    changed |= try_moves(cands, wts[i])
         if not changed:
             break
 
@@ -251,7 +304,7 @@ def caga_round(
         reports.append(CAGAClientReport(
             client_key=client_keys[i], n_examples=int(client_weights[i]),
             alpha=alpha, block_scale={b: (s_block[b] / alpha if alpha > 0 else 0.0) for b in all_blocks},
-            loss_delta=after_mean - base_mean, verdict=verdict,
+            loss_delta=after_mean - base_mean, verdict=verdict, loo_z=loo_z[i], reputation=rep_now[i],
         ))
 
     report = CAGAReport(server_round=server_round, clients=reports,

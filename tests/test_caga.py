@@ -219,3 +219,69 @@ def test_warmup_rounds_use_plain_averaging():
     assert all(np.allclose(n, np.mean([c[b] for c in clients], axis=0)) for b, n in enumerate(new))
     _, rep6 = caga_round(old, clients, keys, [1.0] * 3, BLOCK_MAP, lf, hp, server_round=6)
     assert rep6.clients[2].verdict != "accepted"
+
+
+def _toy(n_samples=200, seed=0):
+    c = np.random.default_rng(seed).uniform(0.5, 1.5, n_samples)  # per-sample scale, so the paired SE is > 0
+    old = [np.zeros(1) for _ in range(3)]
+    return c, old
+
+
+def test_class_aware_keeps_an_honest_specialist():
+    """Client 0 improves its own class (first half of the probe) and hurts a class it never trains
+    on. Judged on the whole probe it looks harmful; judged on its own class it is useful."""
+    c, old = _toy()
+    half = len(c) // 2
+
+    def lf(arrs):
+        a, b = float(arrs[0][0]), float(arrs[1][0])
+        return np.concatenate([c[:half] * (a - 1.0) ** 2, c[half:] * 5.0 * b ** 2])
+
+    clients = [[np.ones(1), np.ones(1), np.zeros(1)], [np.zeros(1) for _ in range(3)]]
+    own = np.concatenate([np.ones(half), np.zeros(len(c) - half)])
+    keys = ["0", "1"]
+    _, plain = caga_round(old, clients, keys, [1.0, 1.0], BLOCK_MAP, lf, CAGAHyperparams(gate_blocks=False), 1)
+    _, aware = caga_round(old, clients, keys, [1.0, 1.0], BLOCK_MAP, lf, CAGAHyperparams(gate_blocks=False, class_aware=True),
+                          1, sample_weights=[own, np.ones(len(c))])
+    assert plain.clients[0].alpha < 1.0
+    assert aware.clients[0].alpha == 1.0
+
+
+def _rep_round(c, old, attacker_delta, hp, state, rnd):
+    def lf(arrs):
+        return c * (float(arrs[0][0]) - 1.0) ** 2
+    clients = [[np.ones(1), np.zeros(1), np.zeros(1)], [np.full(1, attacker_delta), np.zeros(1), np.zeros(1)],
+               [np.zeros(1) for _ in range(3)]]
+    return caga_round(old, clients, ["0", "1", "2"], [1.0] * 3, BLOCK_MAP, lf, hp, rnd, state=state)[1]
+
+
+def test_reputation_ignores_one_bad_round_from_a_good_client():
+    c, old = _toy()
+    hp = CAGAHyperparams(gate_blocks=False, final_check=False, reputation=True)
+    state = {}
+    _rep_round(c, old, 1.0, hp, state, 1)                 # client 1 helps in round 1
+    r2 = _rep_round(c, old, -1.0, hp, state, 2)           # then hurts once
+    assert r2.clients[1].loo_z > 0 and r2.clients[1].reputation < hp.rep_threshold
+    assert r2.clients[1].alpha == 1.0
+    no_rep = _rep_round(c, old, -1.0, CAGAHyperparams(gate_blocks=False, final_check=False), None, 2)
+    assert no_rep.clients[1].alpha < 1.0                  # without reputation the single round gates it
+
+
+def test_reputation_still_drops_a_persistent_attacker_and_needs_state():
+    c, old = _toy()
+    hp = CAGAHyperparams(gate_blocks=False, final_check=False, reputation=True)
+    state = {}
+    reps = [_rep_round(c, old, -1.0, hp, state, r) for r in (1, 2)]
+    assert all(r.clients[1].alpha < 1.0 for r in reps)
+    assert all(r.clients[0].alpha == 1.0 for r in reps)
+    with pytest.raises(ValueError):
+        _rep_round(c, old, -1.0, hp, None, 3)
+
+
+def test_reputation_builds_during_warmup_without_gating():
+    c, old = _toy()
+    hp = CAGAHyperparams(gate_blocks=False, final_check=False, reputation=True, warmup_rounds=1)
+    state = {}
+    r1 = _rep_round(c, old, -1.0, hp, state, 1)
+    assert r1.clients[1].alpha == 1.0 and state["reputation"]["1"] > hp.rep_threshold
+    assert _rep_round(c, old, -1.0, hp, state, 2).clients[1].alpha < 1.0

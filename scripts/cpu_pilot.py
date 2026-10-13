@@ -75,6 +75,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--caga-tol-z", type=float, default=2.0)
     p.add_argument("--caga-tol-rel", type=float, default=0.0)
     p.add_argument("--caga-warmup", type=int, default=0)
+    p.add_argument("--caga-class-aware", action="store_true", help="Judge each client on its own drug classes.")
+    p.add_argument("--caga-reputation", action="store_true", help="Gate only clients with a bad running record.")
+    p.add_argument("--caga-rep-beta", type=float, default=0.7)
+    p.add_argument("--caga-rep-threshold", type=float, default=1.0)
+    p.add_argument("--device", default="cpu", help="cpu or cuda; GPU runs use the same protocol.")
     p.add_argument("--clip-multiplier", type=float, default=1.5)
     p.add_argument("--root-obs", type=int, default=None,
                    help="Root edges the server trains on per round (FLTrust, fedavg_root); default: --obs-per-client.")
@@ -171,7 +176,7 @@ def main() -> None:
     a = parse_args()
     torch.set_num_threads(a.threads)
     seed_everything(a.seed)
-    device = torch.device("cpu")
+    device = torch.device(a.device)
     cond_tag = a.cond if a.drift_level == "base" or a.cond in ("clean", "poison") else f"{a.cond}-{a.drift_level}"
     if a.dataset == "drugbank":
         cond_tag = f"db{a.split}-{cond_tag}"
@@ -232,7 +237,13 @@ def main() -> None:
     eval_client = FedDDIClient(cid="-2", trainer=eval_trainer, local_epochs=1, device=device)
     root_trainer = root_client = block_map = None
     hp = CAGAHyperparams(probe_size=a.probe_size, gate_blocks=a.method != "caga_noblock", tol_z=a.caga_tol_z,
-                         tol_rel=a.caga_tol_rel, warmup_rounds=a.caga_warmup)
+                         tol_rel=a.caga_tol_rel, warmup_rounds=a.caga_warmup, class_aware=a.caga_class_aware,
+                         reputation=a.caga_reputation, rep_beta=a.caga_rep_beta, rep_threshold=a.caga_rep_threshold)
+    caga_state: Dict[str, Any] = {}
+    # A client's share of each drug class, from its own observation mixture (coarse metadata the
+    # server is assumed to know). The probe sample's class is its first drug's ATC class, the same
+    # rule client sampling uses.
+    mixtures = [dict(ds.class_mixture or {}) for ds in datasets]
     if uses_root:
         root_trainer = trainer_for(-1, root_edges)
         root_client = FedDDIClient(cid="-1", trainer=root_trainer, local_epochs=a.local_epochs, device=device,
@@ -279,8 +290,12 @@ def main() -> None:
                                        m=hp.probe_size, seed=rnd, device=device,
                                        exclude_edge_index=root_trainer.edge_index)
             loss_fn = make_probe_loss_fn(root_trainer, block_map, probe)
+            sw = None
+            if a.caga_class_aware and atc_mapping is not None:
+                cls = atc_mapping[probe[: probe.size(0) // 2, 0].cpu()].numpy()
+                sw = [np.array([m.get(int(k), 0.0) for k in cls]) for m in mixtures]
             new, rep = caga_round(params, client_arrays, [str(i) for i in range(a.num_clients)], weights,
-                                  block_map, loss_fn, hp, rnd)
+                                  block_map, loss_fn, hp, rnd, sample_weights=sw, state=caga_state)
             row.update(rep.as_row_fields())
         params = [n.astype(p.dtype, copy=False) for n, p in zip(new, params)]
 
