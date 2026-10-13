@@ -35,6 +35,8 @@ PROTOCOL: Dict[str, Any] = dict(
     fraction_evaluate=1.0,
 
     poison_strength="moderate",
+    # Only "severe" drift measurably hurt FedAvg in the CPU pilot (PUBLICATION_PLAN.md).
+    drift_strength="severe",
     lr=None,
     batch_size=None,
 
@@ -47,15 +49,25 @@ CONDITIONS = {
     "drift": ("none", "d10"),
     "joint": ("p10", "d10"),
 }
-METHODS = ("fedavg", "normclip", "caga", "fltrust")
+METHODS = ("fedavg", "normclip", "caga", "fltrust", "rootclient", "caga_noblock")
+
+# Overrides applied to every drift event. "base" keeps the original narrow drift.
+DRIFT_LEVELS = {
+    "base": None,
+    "wide": dict(feature_dims=list(range(16)), shift_magnitude=2.0, noise_std=0.5, target_node_frac=0.5),
+    "severe": dict(feature_dims=list(range(50)), shift_magnitude=2.0, noise_std=1.0, target_node_frac=0.75),
+}
 
 
 TIERS = {
     1: dict(conds=("clean", "joint"), methods=("fedavg", "caga")),
     2: dict(conds=("clean", "joint"), methods=("normclip",)),
     3: dict(conds=("poison", "drift"), methods=("fedavg", "caga", "normclip")),
-    # Optional FLTrust baseline; not part of the default 60-run plan.
-    4: dict(conds=("clean", "poison", "drift", "joint"), methods=("fltrust",)),
+    # Optional baselines, not part of the default 60-run plan: FLTrust, and FedAvg with the server's
+    # root update as one more client (controls for the clean data CAGA and FLTrust use).
+    4: dict(conds=("clean", "poison", "drift", "joint"), methods=("fltrust", "rootclient")),
+    # Ablation: CAGA gating whole clients only, without per-block gating.
+    5: dict(conds=("drift", "joint"), methods=("caga_noblock",)),
 }
 
 
@@ -86,6 +98,9 @@ def build_specs(P: Dict[str, Any] = PROTOCOL) -> Tuple[Dict[str, list], Dict[str
         dict(client_id=d1, kind="gradual", start_round=t0 + 10, transition_rounds=10, feature_dims=[2, 3, 4],
              shift_magnitude=2.5, noise_std=0.2, target_node_frac=0.30, node_selection="random"),
     ]
+    level = DRIFT_LEVELS[P.get("drift_strength", "base")]
+    if level:
+        drift = [dict(d, **level) for d in drift]
     return {"none": [], "p10": poison}, {"none": [], "d10": drift}
 
 
@@ -107,8 +122,11 @@ def overrides_for(run: Dict[str, Any], run_dir: str, use_perf: bool = True,
                "normclip": {"mode": "norm_clip", "clip_multiplier": 1.5},
                "caga": {"mode": "caga", "caga_probe_size": 4000, "caga_max_sweeps": 2,
                          "caga_tol_rel": P.get("caga_tol_rel", 0.0)},
-               "fltrust": {"mode": "fltrust"}}[run["method"]]
-    if defense and defense["mode"] in ("caga", "fltrust") and use_perf:
+               "fltrust": {"mode": "fltrust"},
+               "rootclient": {"mode": "root_client"},
+               "caga_noblock": {"mode": "caga", "caga_probe_size": 4000, "caga_max_sweeps": 2,
+                                "caga_tol_rel": P.get("caga_tol_rel", 0.0), "caga_gate_blocks": False}}[run["method"]]
+    if defense and defense["mode"] in ("caga", "fltrust", "root_client") and use_perf:
         defense["root_device"] = "cuda"
     exp = dict(algorithm="fedavg", poison=pk, datadrift=dk, seed=run["seed"],
                num_rounds=num_rounds or P["num_rounds"])

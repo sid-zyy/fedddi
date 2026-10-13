@@ -148,6 +148,15 @@ def test_caga_routing_maps_flower_node_ids_to_partition_ids(tmp_path):
 def test_fltrust_tier_is_optional_and_uses_root_device():
     assert all(r["method"] != "fltrust" for r in jp.make_runs())
     runs = jp.make_runs(tiers=(4,))
-    assert len(runs) == 5 * 4 and {r["method"] for r in runs} == {"fltrust"}
+    assert len(runs) == 5 * 4 * 2 and {r["method"] for r in runs} == {"fltrust", "rootclient"}
     s = " ".join(jp.overrides_for(runs[0], "/tmp/x"))
     assert "defense.mode=fltrust" in s and "defense.root_device=cuda" in s
+
+
+def test_drift_defaults_to_severe_and_ablation_disables_block_gating():
+    _, d = jp.build_specs()
+    assert all(e["feature_dims"] == list(range(50)) and e["target_node_frac"] == 0.75 for e in d["d10"])
+    _, base = jp.build_specs(dict(jp.PROTOCOL, drift_strength="base"))
+    assert base["d10"][0]["feature_dims"] == [0, 1, 2, 3]
+    r = jp.make_runs(tiers=(5,))[0]
+    assert "defense.caga_gate_blocks=False" in jp.overrides_for(r, "/tmp/x")

@@ -41,7 +41,8 @@ from src.training.robust_aggregation import clip_and_average  # noqa: E402
 from src.training.trainer import build_client_trainer  # noqa: E402
 from src.utils.utils import seed_everything  # noqa: E402
 
-METHODS = ("fedavg", "normclip", "fltrust", "caga")
+METHODS = ("fedavg", "fedavg_root", "normclip", "fltrust", "caga", "caga_noblock")
+DRIFT_LEVELS = jp.DRIFT_LEVELS
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--method", choices=METHODS, required=True)
     p.add_argument("--cond", choices=tuple(jp.CONDITIONS), required=True)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--drift-level", choices=tuple(DRIFT_LEVELS), default=jp.PROTOCOL["drift_strength"])
     p.add_argument("--out", default="results/cpu_pilot")
     p.add_argument("--data", default=os.path.join(ROOT, "data"))
     p.add_argument("--num-clients", type=int, default=10)
@@ -62,7 +64,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--poison-strength", choices=("moderate", "strong"), default="moderate")
     p.add_argument("--root-frac", type=float, default=0.12)
     p.add_argument("--probe-size", type=int, default=4000)
+    p.add_argument("--caga-tol-z", type=float, default=2.0)
+    p.add_argument("--caga-tol-rel", type=float, default=0.0)
+    p.add_argument("--caga-warmup", type=int, default=0)
+    p.add_argument("--clip-multiplier", type=float, default=1.5)
+    p.add_argument("--root-obs", type=int, default=None,
+                   help="Root edges the server trains on per round (FLTrust, fedavg_root); default: --obs-per-client.")
     p.add_argument("--threads", type=int, default=4)
+    p.add_argument("--tag", default="", help="Suffix for the run name, e.g. a hyperparameter setting.")
     return p.parse_args()
 
 
@@ -87,7 +96,8 @@ def load_features(data_root: str, edge_index: torch.Tensor, num_nodes: int, seed
 
 
 def build_events(a: argparse.Namespace):
-    P = dict(jp.PROTOCOL, attack_start=a.attack_start, poison_strength=a.poison_strength)
+    P = dict(jp.PROTOCOL, attack_start=a.attack_start, poison_strength=a.poison_strength,
+             drift_strength=a.drift_level)
     poison_specs, drift_specs = jp.build_specs(P)
     pk, dk = jp.CONDITIONS[a.cond]
     poison = [PoisonEvent(client_id=s["client_id"], start_round=s["start_round"], suppress=s.get("suppress", {}),
@@ -112,7 +122,8 @@ def main() -> None:
     torch.set_num_threads(a.threads)
     seed_everything(a.seed)
     device = torch.device("cpu")
-    run_name = f"{a.cond}_{a.method}_seed{a.seed}"
+    cond_tag = a.cond if a.drift_level == "base" or a.cond in ("clean", "poison") else f"{a.cond}-{a.drift_level}"
+    run_name = f"{cond_tag}_{a.method}_seed{a.seed}" + (f"_{a.tag}" if a.tag else "")
     out_dir = os.path.join(a.out, run_name)
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "settings.json"), "w") as f:
@@ -129,8 +140,8 @@ def main() -> None:
         print("WARNING: no ATC mapping; poisoning 'emerge' has no effect.", flush=True)
     cfg = make_cfg(a, os.path.join(out_dir, "ckpt"))
 
-    # Mirror main_fl.py: only CAGA and FLTrust reserve root edges.
-    uses_root = a.method in ("caga", "fltrust")
+    # Mirror main_fl.py: only methods that use the server's clean edges reserve them.
+    uses_root = a.method in ("caga", "caga_noblock", "fltrust", "fedavg_root")
     train_full = split["train"]["edge"]
     root_edges = None
     client_pool = train_full
@@ -162,7 +173,8 @@ def main() -> None:
     eval_trainer = trainer_for(-2, client_pool[:1000])
     eval_client = FedDDIClient(cid="-2", trainer=eval_trainer, local_epochs=1, device=device)
     root_trainer = root_client = block_map = None
-    hp = CAGAHyperparams(probe_size=a.probe_size)
+    hp = CAGAHyperparams(probe_size=a.probe_size, gate_blocks=a.method != "caga_noblock", tol_z=a.caga_tol_z,
+                         tol_rel=a.caga_tol_rel, warmup_rounds=a.caga_warmup)
     if uses_root:
         root_trainer = trainer_for(-1, root_edges)
         root_client = FedDDIClient(cid="-1", trainer=root_trainer, local_epochs=a.local_epochs, device=device,
@@ -180,19 +192,25 @@ def main() -> None:
         weights = [float(f[1]) for f in fits]
         row: Dict[str, Any] = {"round": rnd, "train_loss": float(np.mean([f[2]["loss"] for f in fits]))}
 
-        if a.method == "fedavg":
+        if a.method in ("fltrust", "fedavg_root"):
+            # The server trains on a fresh client-sized sample of root edges, taking as many optimizer
+            # steps as a client (FLTrust rescales client updates to this update's norm).
+            g = torch.Generator().manual_seed(a.seed * 100_003 + rnd)
+            pick = torch.randint(0, root_edges.size(0), (a.root_obs or a.obs_per_client,), generator=g)
+            root_trainer.split["train"]["edge"] = root_edges[pick]
+            server_arrays = root_client.fit(params, {"server_round": rnd})[0]
+        if a.method == "fedavg_root":
+            # Control for CAGA's extra data: the server's root update joins plain averaging as one more client.
+            arrays_all, w_all = client_arrays + [server_arrays], weights + [float(np.mean(weights))]
+            tot = sum(w_all)
+            new = [sum(w * arrs[k] for w, arrs in zip(w_all, arrays_all)) / tot for k in range(len(params))]
+        elif a.method == "fedavg":
             tot = sum(weights)
             new = [sum(w * arrs[k] for w, arrs in zip(weights, client_arrays)) / tot for k in range(len(params))]
         elif a.method == "normclip":
-            new, rep = clip_and_average(params, client_arrays, weights, 1.5, rnd)
+            new, rep = clip_and_average(params, client_arrays, weights, a.clip_multiplier, rnd)
             row["clipped"] = json.dumps(rep.clipped_mask)
         elif a.method == "fltrust":
-            # FLTrust rescales client updates to the server update's norm, so the server takes as many
-            # optimizer steps as a client: it trains on a fresh client-sized sample of root edges.
-            g = torch.Generator().manual_seed(a.seed * 100_003 + rnd)
-            pick = torch.randint(0, root_edges.size(0), (a.obs_per_client,), generator=g)
-            root_trainer.split["train"]["edge"] = root_edges[pick]
-            server_arrays = root_client.fit(params, {"server_round": rnd})[0]
             new, rep = fltrust_aggregate(params, client_arrays, server_arrays, [str(i) for i in range(a.num_clients)], rnd)
             row["fltrust_trust"] = json.dumps([round(t, 3) for t in rep.trust])
         else:
@@ -214,7 +232,9 @@ def main() -> None:
         reports = [clients[i].evaluate(params, {"server_round": rnd})[2] for i in special]
         for key, col in (("drift_region_Hits@20", "drift_region_hits20"),
                          ("non_drift_region_Hits@20", "non_drift_region_hits20"),
-                         ("poison_attack_mean_prob", "poison_attack_mean_prob")):
+                         ("poison_attack_mean_prob", "poison_attack_mean_prob"),
+                         ("poison_fabricated_mean_prob", "poison_fabricated_mean_prob"),
+                         ("poison_suppressed_mean_prob", "poison_suppressed_mean_prob")):
             v = mean_over(reports, key)
             if v is not None:
                 row[col] = v

@@ -14,7 +14,7 @@ from journal_protocol import (
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--results-dir', default='results')
-    parser.add_argument('--tiers', nargs='+', type=int, choices=[1, 2, 3, 4], default=[1])
+    parser.add_argument('--tiers', nargs='+', type=int, choices=[1, 2, 3, 4, 5], default=[1])
     parser.add_argument('--seeds', nargs='+', type=int, default=list(PROTOCOL['seeds']))
     action = parser.add_mutually_exclusive_group()
     action.add_argument('--execute', action='store_true', help='Run the listed experiments on a GPU.')

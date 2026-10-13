@@ -1,6 +1,6 @@
 # FedDDI-CAGA
 
-Clean-Anchor Gated Aggregation (CAGA) for federated drug–drug interaction prediction on `ogbl-ddi`.
+Clean-Anchor Gated Aggregation (CAGA) for federated drug–drug interaction prediction on `ogbl-ddi`. One probe-gated aggregation rule is used against label poisoning and feature drift together, without knowing which is present.
 
 The model combines a GraphSAGE encoder with a Hadamard-product MLP link predictor. CAGA evaluates candidate aggregate updates on a clean server probe and reduces updates that increase its ranking loss. It can gate the feature projection, graph convolutions and predictor separately.
 
@@ -43,7 +43,7 @@ Start with a short run to check the installation. It still loads and processes t
 python main_fl.py defense.mode=caga num_clients=3 num_rounds=2 local_epochs=1 device=cuda wandb.mode=disabled plotting.enabled=false
 ```
 
-Use `device=cpu` if a GPU is unavailable, with substantially longer runtime. To run the same setup without CAGA, change `defense.mode=caga` to `defense.mode=none`. Add `fl.algorithm=fedprox` for the FedProx optimizer or use `defense.mode=norm_clip` for the clipping baseline. `defense.mode=fltrust` runs FLTrust (Cao et al., NDSS 2021): the server trains on the same reserved root edges as CAGA each round and weights clients by ReLU-clipped cosine similarity to that update.
+Use `device=cpu` if a GPU is unavailable, with substantially longer runtime. To run the same setup without CAGA, change `defense.mode=caga` to `defense.mode=none`. Add `fl.algorithm=fedprox` for the FedProx optimizer or use `defense.mode=norm_clip` for the clipping baseline. `defense.mode=fltrust` runs FLTrust (Cao et al., NDSS 2021): the server trains on the same reserved root edges as CAGA each round and weights clients by ReLU-clipped cosine similarity to that update. `defense.mode=root_client` is a control: plain FedAvg with the server's root-edge update averaged in as one more client, which separates the benefit of the server's clean data from the benefit of a defense.
 
 For a centralized baseline with the same fixed features:
 

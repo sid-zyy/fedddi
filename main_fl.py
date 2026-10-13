@@ -164,18 +164,18 @@ class CAGAStrategy(FedAvg):
         caga_block_map: Optional[Dict[str, List[int]]]=None,
         caga_hp: Optional[Any]=None,
         on_caga_stats: Optional[Callable[[int, Any], None]]=None,
-        fltrust_server_update: Optional[Callable[[int, List[np.ndarray]], List[np.ndarray]]]=None,
+        server_update: Optional[Callable[[int, List[np.ndarray]], List[np.ndarray]]]=None,
         on_fltrust_stats: Optional[Callable[[int, Any], None]]=None,
         **kwargs: Any
     ) -> None:
         super().__init__(**kwargs)
         self._algorithm = algorithm.lower()
         self._num_total_clients = num_total_clients
-        if defense_mode not in ('none', 'norm_clip', 'caga', 'fltrust'):
-            raise ValueError(f"Unknown defense_mode {defense_mode!r} — expected 'none', 'norm_clip', 'caga' or 'fltrust'.")
-        if defense_mode == 'fltrust' and fltrust_server_update is None:
-            raise ValueError("defense_mode='fltrust' requires fltrust_server_update.")
-        self._fltrust_server_update = fltrust_server_update
+        if defense_mode not in ('none', 'norm_clip', 'caga', 'fltrust', 'root_client'):
+            raise ValueError(f"Unknown defense_mode {defense_mode!r} — expected 'none', 'norm_clip', 'caga', 'fltrust' or 'root_client'.")
+        if defense_mode in ('fltrust', 'root_client') and server_update is None:
+            raise ValueError(f"defense_mode={defense_mode!r} requires server_update.")
+        self._server_update = server_update
         self._on_fltrust_stats = on_fltrust_stats
         self._defense_mode = defense_mode
         self._clip_multiplier = clip_multiplier
@@ -228,6 +228,22 @@ class CAGAStrategy(FedAvg):
     def aggregate_fit(self, server_round, results, failures):
         # Keep diagnostic arrays aligned with client partition IDs.
         results = sorted(results, key=lambda pair: int(pair[1].metrics.get('cid', 0)))
+        if self._defense_mode == 'root_client':
+            if not results:
+                return (None, {})
+            if self._last_parameters_ndarrays is None:
+                self._last_parameters_ndarrays = parameters_to_ndarrays(results[0][1].parameters)
+            # Control for the server's clean data: its root update joins plain averaging as one more client.
+            arrays = [parameters_to_ndarrays(fit_res.parameters) for _, fit_res in results]
+            weights = [float(fit_res.num_examples) for _, fit_res in results]
+            arrays.append(self._server_update(server_round, self._last_parameters_ndarrays))
+            weights.append(float(np.mean(weights)))
+            total = sum(weights)
+            averaged = [sum(w * a[k] for w, a in zip(weights, arrays)) / total for k in range(len(arrays[0]))]
+            self._last_parameters_ndarrays = averaged
+            fit_metrics = [(fit_res.num_examples, fit_res.metrics) for _, fit_res in results]
+            metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics) if self.fit_metrics_aggregation_fn else {}
+            return (ndarrays_to_parameters(averaged), metrics_aggregated)
         if self._defense_mode == 'fltrust':
             if not results:
                 return (None, {})
@@ -240,7 +256,7 @@ class CAGAStrategy(FedAvg):
             ]
             client_ndarrays = [parameters_to_ndarrays(fit_res.parameters) for _, fit_res in results]
             # The server update starts from the same global model the clients received.
-            server_ndarrays = self._fltrust_server_update(server_round, self._last_parameters_ndarrays)
+            server_ndarrays = self._server_update(server_round, self._last_parameters_ndarrays)
             averaged, fltrust_report = fltrust_aggregate(
                 old_arrays=self._last_parameters_ndarrays,
                 client_arrays=client_ndarrays,
@@ -420,7 +436,7 @@ def main(cfg: DictConfig) -> None:
     # Root edges are excluded from client observations, but remain in the public graph.
     _early_defense_mode = cfg.get('defense', {}).get('mode', 'none')
     root_edges: Optional[torch.Tensor] = None
-    if _early_defense_mode in ('caga', 'fltrust'):
+    if _early_defense_mode in ('caga', 'fltrust', 'root_client'):
         _defense_cfg_early = cfg.get('defense', {})
         if 'root_frac' in _defense_cfg_early:
             _root_frac = float(_defense_cfg_early['root_frac'])
@@ -535,17 +551,18 @@ def main(cfg: DictConfig) -> None:
             gate_blocks=bool(defense_cfg.get('caga_gate_blocks', True)),
             final_check=bool(defense_cfg.get('caga_final_check', True)),
             max_sweeps=int(defense_cfg.get('caga_max_sweeps', 2)),
-            max_rel_increase=float(defense_cfg.get('caga_max_rel_increase', 0.1))
+            max_rel_increase=float(defense_cfg.get('caga_max_rel_increase', 0.1)),
+            warmup_rounds=int(defense_cfg.get('caga_warmup_rounds', 0))
         )
         logger.info(
             'Poisoning+drift recovery ENABLED — CAGA defense (src/training/caga.py, docs/METHOD.md): %s, root_frac=%.3f',
             caga_hp,
             root_frac_used
         )
-    if defense_mode not in ('none', 'norm_clip', 'caga', 'fltrust'):
-        raise ValueError(f"Unknown defense.mode {defense_mode!r} — expected 'none', 'norm_clip', 'caga' or 'fltrust'.")
-    fltrust_server_update: Optional[Callable[[int, List[np.ndarray]], List[np.ndarray]]] = None
-    if defense_mode == 'fltrust':
+    if defense_mode not in ('none', 'norm_clip', 'caga', 'fltrust', 'root_client'):
+        raise ValueError(f"Unknown defense.mode {defense_mode!r} — expected 'none', 'norm_clip', 'caga', 'fltrust' or 'root_client'.")
+    server_update: Optional[Callable[[int, List[np.ndarray]], List[np.ndarray]]] = None
+    if defense_mode in ('fltrust', 'root_client'):
         assert root_trainer is not None
         # The server's reference update uses the same local training procedure as the clients.
         _root_client = FedDDIClient(
@@ -558,12 +575,12 @@ def main(cfg: DictConfig) -> None:
             num_rounds=num_rounds
         )
 
-        # FLTrust rescales client updates to the server update's norm, so by default the server trains on
-        # a fresh client-sized sample of root edges each round and takes as many steps as a client.
+        # The server trains on a fresh client-sized sample of root edges each round and takes as many steps
+        # as a client: FLTrust rescales client updates to this update's norm, and root_client weights it as one.
         _fltrust_obs = defense_cfg.get('fltrust_root_obs', None) or obs_cfg.get('observations_per_client', None)
         _fltrust_root_edges = root_trainer.split['train']['edge']
 
-        def fltrust_server_update(rnd: int, arrays: List[np.ndarray]) -> List[np.ndarray]:
+        def server_update(rnd: int, arrays: List[np.ndarray]) -> List[np.ndarray]:
             if _fltrust_obs:
                 g = torch.Generator().manual_seed(int(cfg.training.seed) * 100003 + rnd)
                 pick = torch.randint(0, _fltrust_root_edges.size(0), (int(_fltrust_obs),), generator=g)
@@ -571,7 +588,8 @@ def main(cfg: DictConfig) -> None:
             new_arrays, _, _ = _root_client.fit(arrays, {'server_round': rnd})
             return new_arrays
         logger.info(
-            'Poisoning recovery ENABLED — FLTrust defense (src/training/fltrust.py), root_frac=%.3f, server trains on %s',
+            'Server root update ENABLED — %s (root_frac=%.3f), server trains on %s',
+            'FLTrust defense (src/training/fltrust.py)' if defense_mode == 'fltrust' else 'root_client baseline',
             root_frac_used,
             _root_device
         )
@@ -600,6 +618,8 @@ def main(cfg: DictConfig) -> None:
         run_tag += '_defended_caga'
     elif defense_mode == 'fltrust':
         run_tag += '_defended_fltrust'
+    elif defense_mode == 'root_client':
+        run_tag += '_root_client'
     csv_dir = cfg.get('csv_output_dir', '.')
     os.makedirs(csv_dir, exist_ok=True)
     csv_path = os.path.join(csv_dir, f'results_{run_tag}_seed{cfg.training.seed}.csv')
@@ -614,6 +634,8 @@ def main(cfg: DictConfig) -> None:
         'federated_local_val_hits20',
         'poison_attack_mean_prob',
         'poison_attack_n',
+        'poison_fabricated_mean_prob',
+        'poison_suppressed_mean_prob',
         'drift_region_hits20',
         'drift_region_n',
         'defense_clip_threshold',
@@ -689,6 +711,9 @@ def main(cfg: DictConfig) -> None:
         if 'poison_attack_mean_prob' in aggregated:
             row['poison_attack_mean_prob'] = aggregated['poison_attack_mean_prob']
             row['poison_attack_n'] = aggregated.get('poison_attack_n', '')
+        for key in ('poison_fabricated_mean_prob', 'poison_suppressed_mean_prob'):
+            if key in aggregated:
+                row[key] = aggregated[key]
         if 'drift_region_Hits@20' in aggregated:
             row['drift_region_hits20'] = aggregated['drift_region_Hits@20']
             row['drift_region_n'] = aggregated.get('drift_region_n', '')
@@ -799,7 +824,7 @@ def main(cfg: DictConfig) -> None:
             caga_block_map=caga_block_map,
             caga_hp=caga_hp,
             on_caga_stats=_record_caga_stats,
-            fltrust_server_update=fltrust_server_update,
+            server_update=server_update,
             on_fltrust_stats=_record_fltrust_stats,
             fraction_fit=1.0,
             fraction_evaluate=cfg.get('fraction_evaluate', 1.0),

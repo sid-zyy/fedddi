@@ -46,6 +46,7 @@ def _install_stubs():
     sys.modules["torch_geometric.nn"].SAGEConv = _FakeSAGEConv
     sys.modules["torch_geometric.utils"].negative_sampling = _neg_sample
     sys.modules["torch_geometric.utils"].to_undirected = lambda x, **k: x
+    sys.modules["torch_geometric.data"].Data = object
 
     class _FakeEval:
         def eval(self, d):
@@ -68,6 +69,7 @@ def _install_stubs():
     sys.modules["flwr.common"].Scalar = object
     sys.modules["flwr.common"].Context = object
     sys.modules["flwr.common"].ndarrays_to_parameters = lambda arrs: arrs
+    sys.modules["flwr.common"].parameters_to_ndarrays = lambda p: p
     sys.modules["flwr.server"].ServerApp = object
     sys.modules["flwr.server"].ServerAppComponents = object
     sys.modules["flwr.server"].ServerConfig = object

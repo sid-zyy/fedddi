@@ -84,6 +84,10 @@ class FedDDIClient(NumPyClient):
 
         self.update_scale = update_scale
         self.poison_target_edges = poison_target_edges
+        # Fabricated (emerged) and suppressed (false-negative) edges move in opposite directions under
+        # a successful attack, so they are also scored separately.
+        self.poison_fabricated_edges: Optional[torch.Tensor] = None
+        self.poison_suppressed_edges: Optional[torch.Tensor] = None
         self.c_id_int = c_id_int
         self.poisoning_simulator = poisoning_simulator
         self.data_drift_simulator = data_drift_simulator
@@ -124,6 +128,8 @@ class FedDDIClient(NumPyClient):
             current_datasets = self.poisoning_simulator.step(server_round)
             ds = current_datasets[self.c_id_int]
             self.trainer.split["train"]["edge"] = ds.edges.to(self.device)
+            self.poison_fabricated_edges = ds.emerged_edges if ds.emerged_edges.numel() else None
+            self.poison_suppressed_edges = ds.false_negative_edges if ds.false_negative_edges.numel() else None
             if ds.emerged_edges.numel() or ds.false_negative_edges.numel():
                 self.poison_target_edges = torch.cat(
                     [ds.emerged_edges, ds.false_negative_edges], dim=0
@@ -410,6 +416,19 @@ class FedDDIClient(NumPyClient):
                 attack_scores["mean_prob"],
                 attack_scores["n"],
             )
+
+        for key, edges in (("poison_fabricated_mean_prob", self.poison_fabricated_edges),
+                           ("poison_suppressed_mean_prob", self.poison_suppressed_edges)):
+            if edges is not None and edges.numel() > 0:
+                metrics[key] = score_edge_set(
+                    encoder=self.encoder,
+                    predictor=self.predictor,
+                    edge_index=self.trainer.edge_index,
+                    edges=edges.to(self.device),
+                    batch_size=self.trainer.cfg.training.batch_size,
+                    device=self.device,
+                    node_dist_enc=self.trainer.dist_enc,
+                )["mean_prob"]
 
         num_examples = int(val_edges.size(0))
 

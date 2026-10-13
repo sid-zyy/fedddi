@@ -1,4 +1,4 @@
-# Set defense.mode=caga for CAGA; none, norm_clip and fltrust are comparison baselines.
+# Set defense.mode=caga for CAGA; none, norm_clip, fltrust and root_client are comparison baselines.
 # fltrust shares root_frac and root_device with caga. defense.fltrust_root_obs sets how many root
 # edges the FLTrust server samples per round (default: local_observations.observations_per_client).
 defaults:
@@ -77,6 +77,7 @@ defense:
   caga_final_check: true
   caga_max_sweeps: 2
   caga_max_rel_increase: 0.1
+  caga_warmup_rounds: 0
   root_device: cpu
 plotting:
   enabled: true

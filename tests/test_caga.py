@@ -207,3 +207,15 @@ def test_cap_does_not_bind_on_small_noisy_differences():
     base = rng.normal(1.0, 0.2, 500)
     losses = {0.0: base, 1.0: base + rng.normal(0.01, 0.2, 500)}
     assert select_largest_within_noise([0.0, 1.0], losses, 2.0, 0.0, max_rel_increase=0.1) == 1.0
+
+
+def test_warmup_rounds_use_plain_averaging():
+    old, theta_star, lf, toward, away = make_env(seed=3)
+    clients = [toward(0.5), toward(0.4), away(3.0)]
+    hp = CAGAHyperparams(warmup_rounds=5)
+    keys = [str(i) for i in range(3)]
+    new, rep = caga_round(old, clients, keys, [1.0] * 3, BLOCK_MAP, lf, hp, server_round=5)
+    assert [c.verdict for c in rep.clients] == ["accepted"] * 3 and rep.final_gamma == 1.0
+    assert all(np.allclose(n, np.mean([c[b] for c in clients], axis=0)) for b, n in enumerate(new))
+    _, rep6 = caga_round(old, clients, keys, [1.0] * 3, BLOCK_MAP, lf, hp, server_round=6)
+    assert rep6.clients[2].verdict != "accepted"

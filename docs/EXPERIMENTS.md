@@ -9,11 +9,11 @@
 | Rounds / local epochs | 100 / 5 |
 | Seeds | 0–4 |
 | Poisoned clients | 0, 1 |
-| Drifted clients | 2, 3 |
+| Drifted clients | 2, 3 (severe drift: all 50 features, 75% of nodes) |
 | Onset rounds | 40 and 50 |
 | Evaluation window | Rounds 81–100 |
 
-Poisoned and drifted client groups are disjoint. Conditions are clean, poison-only, drift-only and joint. Tier 1 compares FedAvg and CAGA on clean and joint conditions; tier 2 adds norm clipping; tier 3 compares all three methods on poison-only and drift-only conditions. The complete protocol contains 60 runs. Optional tier 4 runs FLTrust on all four conditions (20 further runs); it is not selected by default and must be requested with `--tiers 4`.
+Poisoned and drifted client groups are disjoint. Conditions are clean, poison-only, drift-only and joint. Tier 1 compares FedAvg and CAGA on clean and joint conditions; tier 2 adds norm clipping; tier 3 compares all three methods on poison-only and drift-only conditions. The complete protocol contains 60 runs. Optional tier 4 runs FLTrust and the root-client control (FedAvg with the server's root update averaged in as one more client) on all four conditions (40 further runs); it is not selected by default and must be requested with `--tiers 4`. Optional tier 5 is the block-gating ablation: CAGA with `caga_gate_blocks=false` under drift-only and joint conditions (`--tiers 5`).
 
 The protocol's reference window is rounds 30–39 inclusive, strictly before the round-40 onset. If you change `attack_start`, move both windows with it and use the same choice for every method and seed.
 

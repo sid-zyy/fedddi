@@ -46,6 +46,9 @@ class CAGAHyperparams:
     gate_order: Tuple[str, ...] = ("feature_proj", "mlp", "convs")
     gate_blocks: bool = True
     final_check: bool = True
+    # Rounds 1..warmup_rounds use plain weighted averaging. Early in training honest non-IID updates
+    # disagree most, and gating them then is mostly false positives.
+    warmup_rounds: int = 0
 
 
 @dataclass
@@ -162,6 +165,7 @@ def caga_round(
     cur = loss_of(e)
 
     min_gain = hp.tol_rel * abs(base_mean - float(cur.mean())) if hp.tol_rel > 0.0 else 0.0
+    warm = server_round <= hp.warmup_rounds
 
     def try_moves(moves: List[List[Dict[str, float]]]) -> bool:
         """Evaluate candidate scale-states; adopt the best one iff it is significantly better than
@@ -180,7 +184,7 @@ def caga_round(
 
     def copy_e(): return [dict(d) for d in e]
 
-    for _ in range(hp.max_sweeps):
+    for _ in range(0 if warm else hp.max_sweeps):
         changed = False
 
         for i in range(n):
@@ -213,12 +217,13 @@ def caga_round(
     after_mean = base_mean
     if any_step:
         gl: Dict[float, np.ndarray] = {0.0: base_loss_vec}
-        grid = list(hp.alpha_grid) if hp.final_check else [1.0]
+        check = hp.final_check and not warm
+        grid = list(hp.alpha_grid) if check else [1.0]
         for g in grid:
             if g == 0.0:
                 continue
             gl[g] = cur if g == 1.0 else loss_fn(_combine(old_arrays, agg, block_map, {b: g for b in all_blocks}))
-        if hp.final_check:
+        if check:
             # tol_rel sets how large a gating improvement must be; it must not loosen this check,
             # because min_gain grows with the damage done by the round's aggregate.
             gamma = select_largest_within_noise(list(gl.keys()), gl, hp.tol_z, hp.tol_abs,

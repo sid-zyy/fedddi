@@ -108,6 +108,7 @@ class TestFLTrustStrategy(unittest.TestCase):
         ], type_ignores=[])
         namespace = {
             'FedAvg': _BaseStrategy,
+            'np': np,
             'parameters_to_ndarrays': lambda x: x,
             'ndarrays_to_parameters': lambda x: x,
             'logger': logging.getLogger(__name__),
@@ -130,7 +131,7 @@ class TestFLTrustStrategy(unittest.TestCase):
         reports = []
         strategy = self.strategy(
             algorithm='fedavg', num_total_clients=2, defense_mode='fltrust',
-            fltrust_server_update=server_update, initial_parameters=old,
+            server_update=server_update, initial_parameters=old,
             on_fltrust_stats=lambda rnd, report: reports.append(report),
         )
         strategy.initialize_parameters(None)
@@ -150,3 +151,17 @@ class TestFLTrustStrategy(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestRootClientStrategy(TestFLTrustStrategy):
+    def test_server_update_is_averaged_as_one_more_client(self):
+        old = [np.zeros(2)]
+        strategy = self.strategy(
+            algorithm='fedavg', num_total_clients=2, defense_mode='root_client',
+            server_update=lambda rnd, arrays: [arrays[0] + 3.0], initial_parameters=old,
+        )
+        strategy.initialize_parameters(None)
+        results = [(None, SimpleNamespace(parameters=[np.full(2, v)], num_examples=10, metrics={'cid': c}))
+                   for c, v in [(0, 0.0), (1, 6.0)]]
+        arrays, _ = strategy.aggregate_fit(1, results, [])
+        np.testing.assert_allclose(arrays[0], [3.0, 3.0])

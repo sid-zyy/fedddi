@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import importlib.util
 import sys
 import types
@@ -56,6 +58,7 @@ def _install_stub_modules() -> None:
     sys.modules["flwr.common"].Context = object  # type: ignore[attr-defined]
     sys.modules["flwr.common"].Scalar = object  # type: ignore[attr-defined]
     sys.modules["flwr.common"].ndarrays_to_parameters = lambda *a, **k: None  # type: ignore[attr-defined]
+    sys.modules["flwr.common"].parameters_to_ndarrays = lambda p: p  # type: ignore[attr-defined]
     sys.modules["flwr.server"].ServerApp = object  # type: ignore[attr-defined]
     sys.modules["flwr.server"].ServerAppComponents = object  # type: ignore[attr-defined]
     sys.modules["flwr.server"].ServerConfig = object  # type: ignore[attr-defined]
@@ -172,13 +175,13 @@ class TestNoRegressionToBrokenCentralizedMetric:
 
 
 
-        src = inspect.getsource(main_fl_module.build_server_evaluate_fn)
+        src = inspect.getsource(main_fl_module.build_server_evaluate_fn).replace("'", "\"")  # quote style is not under test
 
 
 
 
 
-        assert '"server_diag"' in src
+        assert '"server_diag"' in src or "'server_diag'" in src
         assert '"server_eval"' in src
         assert 'f"{tag}_Hits@20"' in src
 
@@ -188,8 +191,6 @@ class TestNoRegressionToBrokenCentralizedMetric:
     def test_main_uses_make_metrics_aggregation_fn_for_strategy(self, main_fl_module):
         import inspect
 
-        src = inspect.getsource(main_fl_module.main)
-        assert 'make_metrics_aggregation_fn("fit")' in src or (
-            "make_metrics_aggregation_fn(" in src and '"fit"' in src
-        )
+        src = inspect.getsource(main_fl_module.main).replace("'", "\"")  # quote style is not under test
+        assert re.search(r"make_metrics_aggregation_fn\(\s*['\"]fit['\"]", src)
         assert '"evaluate"' in src

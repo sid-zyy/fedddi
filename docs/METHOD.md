@@ -26,7 +26,7 @@ Each candidate in a round is scored on the same probe. The round number seeds bo
 - Attacks below the per-round tolerance can accumulate.
 - A stale clean probe can reject useful adaptation to a genuine distribution change.
 - Gating an entire client removes its useful signal as well as its harmful signal.
-- Routing labels describe the selected gating action; they are not validated poison-versus-drift classifications.
+- Routing labels describe the selected gating action; they are not validated poison-versus-drift classifications. In the CPU pilot, drifted clients were down-weighted as whole clients rather than gated on the feature projection alone, so block gating is evaluated as an ablation (`caga_gate_blocks=false`).
 - Candidate scoring adds model forward passes. Runtime and memory must be measured on the intended hardware.
 
 ## FLTrust baseline

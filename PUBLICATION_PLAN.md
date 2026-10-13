@@ -2,37 +2,44 @@
 
 The plan for turning FedDDI-CAGA into a journal paper. Tick items off as they are done, and record decisions here so co-authors share one picture.
 
-Last updated: 2026-10-11.
+Last updated: 2026-10-12.
 
 ## Thesis
 
-**CAGA handles data drift and poisoning at the same time by responding to each differently.**
+**One probe-gated aggregation rule protects a federated model from poisoning and feature drift at the same time, without knowing which threat is present.**
 
-Poisoning and drift damage a federated model in different places:
+Decided 2026-10-12 (Option A). An earlier version claimed CAGA routes the two threats to different blocks: poisoned clients rejected, drifted clients gated only on the feature projection. The CPU pilot did not support that mechanism. Under severe drift, drifted clients were scaled down or rejected and never feature-gated, because shifted inputs also change what the convolutions and MLP learn. Block gating is now an ablation, not the contribution.
 
-| Event | What is corrupted | Where the harm should enter | CAGA's intended response |
-| --- | --- | --- | --- |
-| Poisoning | Labels (fabricated or suppressed interactions), sometimes boosted updates | Every block | Scale down or reject the whole client (`scaled`, `rejected`) |
-| Feature drift | Node features only; labels are still correct | Mainly the feature projection | Gate only the feature projection and keep the convolution and MLP updates (`phi_gated`) |
+What CAGA does in one rule:
 
-FLTrust, Fang et al.'s loss- and error-based rejection, Krum, median and trimmed mean can only weight or drop a whole client. They must either throw away a drifted client's correct label signal or accept its harmful feature signal. **The contribution is block-level routing: CAGA treats a drifted client differently from a poisoned one.** Every experiment below should test that claim.
+| Threat | What is corrupted | What CAGA did in the pilot |
+| --- | --- | --- |
+| Poisoning | Labels (fabricated or suppressed interactions), sometimes boosted updates | Poisoned clients accepted in 3% of post-onset rounds; the rest scaled or rejected |
+| Severe feature drift | Node features; labels are still correct | Drifted clients scaled down (34–53%) or rejected (16–32%); test Hits@20 recovered to clean-FedAvg level |
 
-Secondary contributions, each of which needs its own ablation:
+**Contributions to establish, each with its own evidence:**
 
-- CAGA searches over combinations of clients rather than scoring each client in isolation. A non-IID honest client can look harmful alone and still help the combined update.
-- The final step-size check limits the damage of each round.
+1. **Joint robustness.** In the joint condition CAGA beats FedAvg, norm clipping, FLTrust and the root-client control, with paired confidence intervals that exclude zero.
+2. **No threat model needed.** The same settings work under poison-only, drift-only and joint conditions, with no per-threat tuning.
+3. **Combination search.** CAGA searches over combinations of clients rather than scoring each client in isolation. A non-IID honest client can look harmful alone and still help the combined update. Ablation: per-client scoring (Fang et al.'s loss-based rejection).
+4. **Bounded damage per round.** The final step-size check with its hard cap limits what one round can do.
+
+**Must be reported, not hidden:** CAGA also beats FedAvg with no attack (+0.036 in the pilot), and adding the root data to FedAvg does not explain this. Separate this non-IID aggregation gain from the defense gain by comparing each method's attacked score with its own clean score.
+
+**Ablations:** block gating on vs. off (`caga_noblock`); final check on vs. off; per-client vs. combination search.
 
 ## What "handling drift" means
 
-Decided meaning (**A, drift as corruption**): protect the shared model, evaluated with clean features, from drifted clients while keeping the label signal they contribute. CAGA's clean probe is built for this.
+Meaning used (**drift as corruption**): protect the shared model, evaluated with clean features, from clients whose features have drifted. CAGA's clean probe is built for this, and it does so by down-weighting drifted clients, which also discards their correct label signal.
 
-Not claimed (**B, drift as a genuine change in the data**): the shared model serving drifted clients well on their shifted features. A fixed clean probe works against B. If we want B, the planned extension is personalization: a client whose feature projection is gated keeps its own local copy (in the style of FedBN or FedPer). That turns gating into adaptation. Decide before Phase 3 whether this extension is in scope.
+Not claimed (**drift as a genuine change in the data**): serving drifted clients well on their shifted features. A fixed clean probe works against this. A possible extension is personalization, where down-weighted clients keep local copies of some layers (in the style of FedBN or FedPer); it is out of scope unless the main results are strong.
 
-Metrics follow from A:
+Metrics:
 
 - **Primary:** clean test Hits@20.
-- **Signal retained:** CAGA vs. CAGA that rejects drifted clients outright.
-- **Reported:** drift-region Hits@20, which drifted clients measure on their own shifted features. A drop here is expected under A and must be explained in the paper.
+- **Attack-specific:** mean probability on fabricated edges (lower is better) and on suppressed true edges (higher is better), reported separately.
+- **Reported:** drift-region Hits@20, which drifted clients measure on their own shifted features. It collapses under severe drift for every method; explain this in the paper.
+- **Routing:** how often poisoned, drifted and honest clients are accepted, scaled or rejected, including false gating of honest clients.
 
 ## Where we are
 
@@ -45,6 +52,61 @@ Five 100-round joint-condition runs. They used an older protocol: onset at round
 - **Only one run held up.** In zip 1, CAGA kept test Hits@20 at 0.10 in rounds 81–100, while both FedAvg seeds collapsed to 0. That is one seed, with Hits@20 swinging between 0.01 and 0.21 from round to round.
 - **Training is unstable without any attack.** Norm clipping diverged at round 40, before onset, and zip 2's CAGA had loss spikes before onset. Collapsed runs show a training loss of exactly 2·ln 2 = 1.386: the model predicts 0.5 for every pair and cannot recover.
 - **Too much false gating before the attack.** Before onset, some honest clients were not fully accepted in 30–70% of rounds.
+
+### CPU pilot (2026-10-12)
+
+Setup: `scripts/cpu_pilot.py` with the repository's client, attack and aggregation code, scaled down (hidden size 128, 20k observations per client, 40 rounds, onset at round 12, moderate poisoning, 2 seeds). Window: mean test Hits@20 over rounds 31–40. Treat this as an early signal only; with 2 seeds there are no meaningful confidence intervals.
+
+| Condition | FedAvg | Norm clip | FLTrust | CAGA |
+| --- | --- | --- | --- | --- |
+| Clean | 0.103 | — | — | 0.139 |
+| Drift only | 0.097 | — | — | 0.115 |
+| Joint | 0.076 | 0.096 | 0.116 | 0.127 |
+
+- **Poisoning: promising.** In the joint condition CAGA beat FedAvg on both seeds (+0.060, +0.042). It accepted poisoned clients in 3% of post-onset rounds, scaling or rejecting the rest, while accepting honest clients in 82%. Its lead over FLTrust was +0.021 on seed 0 and +0.001 on seed 1, which is not yet distinguishable.
+- **Part of CAGA's lead is not defense.** CAGA also beat FedAvg under clean conditions (+0.036 on average). It uses the clean root edges to select updates, which FedAvg cannot. Needed baseline: FedAvg with the server training on the root edges as an extra client.
+- **Drift: the thesis is not supported yet.** Drift as configured barely hurt FedAvg (0.097 vs. 0.103 clean, within seed noise), so there was little to handle. Drifted clients were routed to `phi_gated` in only 5–18% of post-onset rounds. They were more often fully rejected, in 5–21% of rounds.
+- **False gating early in training.** Before onset, honest clients were fully accepted in only 26–48% of rounds; this rose to 65–84% later.
+- **The poison metric mixes directions.** `poison_attack_mean_prob` averages fabricated edges (lower is better) with suppressed true edges (higher is better). Report them separately.
+- **Cost.** CAGA rounds took 2–3× as long as FedAvg rounds on CPU.
+
+### CPU pilot, step 1 (2026-10-12)
+
+Same setup, 2 seeds. Drift levels: base (4 features, 25% of nodes), wide (16 features, +2.0, noise 0.5, 50% of nodes), severe (all 50 features, +2.0, noise 1.0, 75% of nodes).
+
+| Condition | FedAvg | FedAvg + root client | CAGA |
+| --- | --- | --- | --- |
+| Clean | 0.103 | 0.109 | 0.139 |
+| Drift, base | 0.097 | — | 0.115 |
+| Drift, wide | 0.104 | — | 0.110 |
+| Drift, severe | **0.073** | — | **0.107** |
+| Joint | 0.076 | 0.075 | 0.127 |
+
+- **Only severe drift hurts.** FedAvg lost 0.031 and 0.030 on the two seeds; base and wide drift had no clear effect. Severe drift is the level to use for drift claims.
+- **CAGA mitigates severe drift,** beating FedAvg by +0.035 and +0.032, back to roughly clean-FedAvg level.
+- **But not through block routing.** Under severe drift, drifted clients were never feature-gated (0% `phi_gated`). They were scaled down (34–53% of post-onset rounds) or rejected (16–32%). The premise that drift harm stays in the feature projection did not hold: drifted inputs change what the convolutions and MLP learn too.
+- **Root data alone does not explain CAGA's lead.** Adding the server's root update as an extra FedAvg client gained little (+0.006 clean, −0.001 joint). CAGA's advantage comes from probe-guided selection, which also helps under clean conditions (+0.036). That clean-condition gain must be reported, and separated from the defense effect in the paper.
+
+**Decision (2026-10-12): Option A.** The thesis is now the single probe-gated rule (see Thesis). Severe drift is the protocol default (`drift_strength` in `scripts/journal_protocol.py`). Running: CAGA with and without block gating (`caga_noblock`, protocol tier 5) under severe drift and the joint condition, plus FedAvg, norm clipping and FLTrust in the joint condition with severe drift.
+
+### CPU pilot, Option A check (2026-10-12)
+
+Joint condition with severe drift, 2 seeds, test Hits@20 over rounds 31–40:
+
+| Method | Seed 0 | Seed 1 | Mean |
+| --- | --- | --- | --- |
+| FedAvg | 0.076 | 0.079 | 0.077 |
+| Norm clip | 0.077 | 0.087 | 0.082 |
+| FLTrust | 0.112 | 0.121 | 0.116 |
+| CAGA without block gating | 0.144 | 0.145 | 0.145 |
+| **CAGA** | **0.173** | **0.139** | **0.156** |
+
+- **Phase 2 gate passed at pilot level:** CAGA beat FLTrust on both seeds (+0.061, +0.019) and FedAvg by +0.097 and +0.060. Two seeds are not enough for a confidence interval.
+- **Detection is clean in the joint condition:** after onset CAGA fully accepted poisoned clients in 3% of rounds and drifted clients in 3–13%, and honest clients in 88–94%. False gating before onset remains high (honest clients fully accepted in about 41% of rounds).
+- **Targeted metrics:** fabricated-edge probability 0.186 for CAGA vs. 0.226 for FedAvg and 0.183 for FLTrust (lower is better); suppressed-edge probability 0.845 vs. 0.821 and 0.858 (higher is better). CAGA and FLTrust are similar here.
+- **Block gating is inconclusive.** Joint: +0.029 on seed 0, −0.006 on seed 1. Severe drift only: no difference (0.089 vs. 0.087, 0.124 vs. 0.125). Without block gating, rounds were about 40% faster (85 s vs. 140 s). Decide with more seeds during tuning; if there is still no difference, default to whole-client gating.
+- **Caution:** CAGA in the joint condition (0.156) scored above CAGA under clean conditions (0.139). With 6 honest clients left, discarding the 4 attacked clients cost nothing here, so the argument that CAGA keeps useful signal from attacked clients is not supported by this setup. The gap is also within the round-to-round noise of Hits@20.
+- **Drift-region Hits@20 collapses for every method** under severe drift (≤0.04), as expected when drifted clients evaluate on their own shifted features.
 
 ### Fixed on 2026-10-11
 
@@ -67,19 +129,19 @@ Five 100-round joint-condition runs. They used an older protocol: onset at round
 - [ ] Decide how a round's metric is reported: window mean, last-K mean, or best-validation checkpoint. Use the same choice everywhere.
 - [ ] Run the GPU test suite (`python -m pytest tests/ -m "not slow and not integration"`) on the training machine, since the probe and FLTrust changes have only been checked without torch.
 
-## Phase 2: Prove drift is a problem and routing fixes it (cheap; go or no-go)
+## Phase 2: Settle the design and tune (CPU, before GPU time)
 
-- [ ] **Drift hurts.** Compare drift-only FedAvg with clean FedAvg over a few seeds. The current drift is a +2.0 shift on features 0–3 for 25% of nodes, plus a gradual event on features 2–4. If clean test Hits@20 does not drop measurably, strengthen the drift (more feature dimensions, larger shift, more nodes) or narrow the claim.
-- [ ] **Routing fires.** In drift-only CAGA runs, drifted clients should be `phi_gated`. Pass criterion, to be set before running: for example, drifted clients have their feature projection gated in at least 50% of post-onset rounds and honest clients in no more than 10%.
-- [ ] If routing does not fire, diagnose before scaling up. Options:
-  - Weight the probe toward the drifted region's nodes.
-  - Try feature-projection gating before whole-client scaling (`gate_order`, sweep order).
-  - Use a per-block tolerance.
-  - Check whether the probe can detect feature drift at all, given that it uses clean features.
-- [ ] Reduce pre-attack false gating of honest non-IID clients, or measure and explain it.
-- [ ] Decide on the personalization extension (meaning B above).
+- [x] **Drift hurts.** Only severe drift (all 50 features, 75% of nodes) measurably hurt FedAvg; it is now the protocol default.
+- [x] **Root-data control.** FedAvg with the server's root update as an extra client gained little, so CAGA's lead is not just extra data.
+- [x] **Thesis decided:** Option A, one probe-gated rule for both threats (see Thesis).
+- [x] **Block-gating ablation** (`caga_noblock`): inconclusive at 2 seeds; revisit with a third seed during tuning.
+- [x] **Joint condition with severe drift:** CAGA 0.156, FLTrust 0.116, norm clip 0.082, FedAvg 0.077 (2 seeds). Gate passed at pilot level.
+- [x] **Shared training settings** (CPU scale, 2026-10-13): grid of lr {0.001, 0.003, 0.01} × local epochs {1, 2, 4} on clean FedAvg, tuning seeds 10–11, validation Hits@20 over rounds 31–40. Chosen: **lr 0.003, 2 local epochs** (0.126). It tied lr 0.001 with 1 epoch (0.126), but was still improving (+0.024 over the previous 10 rounds, against +0.008), which matters for the 100-round protocol. It also reached a lower training loss and matches every earlier pilot run. lr 0.01 was unstable. **More local epochs lowered training loss but hurt validation:** 4 epochs was worst at lr 0.003 (0.079). The GPU protocol's 5 local epochs take a similar number of optimizer steps per round, so check 2 vs. 5 local epochs in the GPU validation runs.
+- [ ] **CAGA tuning** on separate tuning seeds, validation Hits@20 only: `tol_z`, `tol_rel`, probe size, and possibly a no-gating warm-up. Targets: false gating of honest clients early in training, and the clean-vs-attacked gap.
+- [ ] **Baseline tuning** with a comparable budget: norm clip multiplier, FLTrust root sample size.
+- [ ] **Freeze** settings and write the pass criteria here before the GPU matrix.
 
-**Gate:** do not start Phase 3 until drift measurably hurts FedAvg and CAGA routes drifted clients to `phi_gated` on drift-only runs.
+**Gate:** do not start Phase 3 until CAGA beats FLTrust in the pilot's joint condition with severe drift, and settings are frozen.
 
 ## Phase 3: Main experiments
 
@@ -95,21 +157,21 @@ Five 100-round joint-condition runs. They used an older protocol: onset at round
 | Fang et al. loss-based rejection (LFR) | to do | **Closest prior work**; rejects whole clients by validation loss |
 | Krum or Multi-Krum, coordinate median, trimmed mean | to do | Standard robust-aggregation baselines |
 | FLAME | optional | Recent clustering-based defense |
-| CAGA without block gating | to do | **Isolates the contribution:** shows that block routing is what handles drift |
+| CAGA without block gating (`caga_noblock`) | running in pilot | Shows whether per-block gating adds anything beyond whole-client gating |
 | CAGA scoring clients individually | to do | Tests the claim about searching over combinations |
 
 **Attacks.** The current attacks are label poisoning plus update scaling. Add:
 
 - [ ] Model-poisoning attacks: "A Little Is Enough"; min-max and min-sum (Shejwalkar & Houmansadr, NDSS 2021).
 - [ ] An **adaptive attacker** that knows CAGA and stays just under its tolerance each round. Our own docs say such attacks can accumulate, so measure how much.
-- [ ] Drift that harms more than the feature projection, as a stress test of routing.
+- [ ] Drift of different strengths and shapes (feature subsets, node fractions, gradual vs. sudden), to map where CAGA stops helping.
 
 **Metrics:**
 
 - Clean test Hits@20, the primary metric.
 - Drift-region and non-drift-region Hits@20.
 - Attack success: mean probability on fabricated edges, and Hits@20 on suppressed edges.
-- **A routing confusion matrix** over rounds: poisoned → rejected or scaled, drifted → `phi_gated`, honest → accepted. Report precision and recall.
+- **Routing statistics** over rounds: how often poisoned, drifted and honest clients are accepted, scaled or rejected. Report detection precision and recall, treating both poisoned and drifted clients as positives.
 - The accuracy cost of the defense under clean conditions.
 - Runtime and memory overhead per round.
 
@@ -168,8 +230,9 @@ Five 100-round joint-condition runs. They used an older protocol: onset at round
 
 | Risk | Signal | Response |
 | --- | --- | --- |
-| Routing never separates drift from poisoning | Phase 2 gate fails | Narrow the claim to robust aggregation with block gating, or redesign the probe |
-| CAGA does not beat LFR or FLTrust | Phase 3 paired confidence intervals include zero | Lead with the joint condition and the routing analysis; otherwise reframe |
+| Block gating adds nothing | `caga_noblock` matches CAGA | Simplify the method to whole-client gating and say so; the thesis does not depend on it |
+| CAGA does not beat LFR or FLTrust | Phase 3 paired confidence intervals include zero | Lead with no-threat-model robustness across all four conditions; otherwise reframe |
+| Clean-condition gain is mistaken for defense | Reviewers note CAGA also wins with no attack | Report attacked-minus-clean gaps per method alongside raw scores |
 | Adaptive attacks get through | Damage accumulates below tolerance | Report it honestly and bound the damage per round |
 | Training instability masks results | Collapses in clean runs | Phase 1 stability gate |
 | Compute overrun | Pilot timing | Reduced-scale ablations; prioritize the joint condition |
