@@ -4,7 +4,9 @@
 defaults:
 - _self_
 dataset:
+  # ogbl-ddi, or drugbank (needs data/drugbank/drugbank_ddi.pt from scripts/prepare_drugbank.py)
   name: ogbl-ddi
+  split: random
   root: ./data
   num_anchors: 0
   use_features: false

@@ -38,7 +38,8 @@ def build_server_evaluate_fn(
     batch_size: int,
     node_dist_enc: torch.Tensor | None=None,
     using_shared_node_features: bool=False,
-    on_round_eval: Callable[[int, float, float], None] | None=None
+    on_round_eval: Callable[[int, float, float], None] | None=None,
+    on_round_metrics: Callable[[int, Dict[str, float]], None] | None=None
 ) -> Callable[[int, List[np.ndarray], Dict[str, Scalar]], Tuple[float, Dict[str, Scalar]] | None]:
     """Build the server-side evaluation function"""
 
@@ -101,6 +102,12 @@ def build_server_evaluate_fn(
         wandb.log({'round': server_round, f'{tag}_val_hits20': h20_val, f'{tag}_test_hits20': h20_test})
         if on_round_eval is not None:
             on_round_eval(server_round, h20_val, h20_test)
+        if on_round_metrics is not None:
+            # AUROC / AUPR come from evaluators that report them (DrugBank); OGB's reports Hits@K only.
+            extra = {f'val_{k}': float(v) for k, v in val_hits.items() if k in ('auroc', 'aupr')}
+            extra.update({f'test_{k}': float(v) for k, v in test_hits.items() if k in ('auroc', 'aupr')})
+            if extra:
+                on_round_metrics(server_round, extra)
         return (0.0, {f'{tag}_Hits@20': h20_val})
     return evaluate_fn
 
@@ -375,38 +382,51 @@ def main(cfg: DictConfig) -> None:
         group='federated_caga',
         mode=cfg.wandb.mode
     )
-    data, evaluator = load_dataset(root=cfg.dataset.root)
-    assert data.edge_index is not None
-    assert data.num_nodes is not None
-    split = get_edge_split(root=cfg.dataset.root)
-    num_nodes: int = data.num_nodes
-    global_edge_index: torch.Tensor = data.edge_index
-    feat_cfg = cfg.get('fixed_features', {})
-    num_anchors_feat = int(feat_cfg.get('num_anchors', 32))
-    num_spectral_feat = int(feat_cfg.get('num_spectral', 16))
-    feat_cache_path = os.path.join(
-        cfg.dataset.root,
-        f'fixed_features_cache_n{num_nodes}_a{num_anchors_feat}_s{num_spectral_feat}_seed{cfg.training.seed}.pt'
-    )
-    if os.path.exists(feat_cache_path):
-        logger.info('Loading cached fixed global features from %s ...', feat_cache_path)
-        node_features = torch.load(feat_cache_path, weights_only=False)
+    dataset_name = str(cfg.dataset.get('name', 'ogbl-ddi')).lower()
+    atc_mapping = None
+    if dataset_name == 'drugbank':
+        # Licensed DrugBank data processed by scripts/prepare_drugbank.py; fingerprints as node features.
+        from src.data.drugbank import load_drugbank
+        data, evaluator, split, node_features, atc_mapping = load_drugbank(
+            os.path.join(cfg.dataset.root, 'drugbank'), str(cfg.dataset.get('split', 'random'))
+        )
+        num_nodes: int = data.num_nodes
+        global_edge_index: torch.Tensor = data.edge_index
+        logger.info('Loaded DrugBank DDI (%s split): %d drugs, %d training pairs', cfg.dataset.get('split', 'random'),
+                    num_nodes, split['train']['edge'].size(0))
     else:
-        logger.info(
-            'Computing fixed global features (anchors=%d, spectral=%d) ...',
-            num_anchors_feat,
-            num_spectral_feat
+        data, evaluator = load_dataset(root=cfg.dataset.root)
+        assert data.edge_index is not None
+        assert data.num_nodes is not None
+        split = get_edge_split(root=cfg.dataset.root)
+        num_nodes: int = data.num_nodes
+        global_edge_index: torch.Tensor = data.edge_index
+        feat_cfg = cfg.get('fixed_features', {})
+        num_anchors_feat = int(feat_cfg.get('num_anchors', 32))
+        num_spectral_feat = int(feat_cfg.get('num_spectral', 16))
+        feat_cache_path = os.path.join(
+            cfg.dataset.root,
+            f'fixed_features_cache_n{num_nodes}_a{num_anchors_feat}_s{num_spectral_feat}_seed{cfg.training.seed}.pt'
         )
-        node_features = compute_fixed_global_features(
-            global_edge_index.cpu(),
-            num_nodes,
-            num_anchors=num_anchors_feat,
-            num_spectral=num_spectral_feat,
-            seed=cfg.training.seed
-        )
-        os.makedirs(os.path.dirname(feat_cache_path) or '.', exist_ok=True)
-        torch.save(node_features, feat_cache_path)
-        logger.info('Cached fixed global features to %s for future runs.', feat_cache_path)
+        if os.path.exists(feat_cache_path):
+            logger.info('Loading cached fixed global features from %s ...', feat_cache_path)
+            node_features = torch.load(feat_cache_path, weights_only=False)
+        else:
+            logger.info(
+                'Computing fixed global features (anchors=%d, spectral=%d) ...',
+                num_anchors_feat,
+                num_spectral_feat
+            )
+            node_features = compute_fixed_global_features(
+                global_edge_index.cpu(),
+                num_nodes,
+                num_anchors=num_anchors_feat,
+                num_spectral=num_spectral_feat,
+                seed=cfg.training.seed
+            )
+            os.makedirs(os.path.dirname(feat_cache_path) or '.', exist_ok=True)
+            torch.save(node_features, feat_cache_path)
+            logger.info('Cached fixed global features to %s for future runs.', feat_cache_path)
     feat_dim = node_features.shape[1]
     logger.info(
         'Fixed feature dimension: %d → projected to hidden_dim=%d',
@@ -423,9 +443,10 @@ def main(cfg: DictConfig) -> None:
         )
     num_clients = cfg.get('num_clients', 5)
     graph = global_edge_index
-    atc_mapping = None
     atc_path = os.path.join(cfg.dataset.root, 'ogbl_ddi', 'atc_mapping.pt')
-    if os.path.exists(atc_path):
+    if atc_mapping is not None:
+        logger.info('Using the dataset ATC classes for observation sampling.')
+    elif os.path.exists(atc_path):
         atc_mapping = torch.load(atc_path)
         logger.info('Loaded ATC mapping from %s for observation sampling.', atc_path)
     else:
@@ -520,6 +541,13 @@ def main(cfg: DictConfig) -> None:
     data_drift_cfg = cfg.get('data_drift', {})
     data_drift_event_specs = data_drift_cfg.get('events', []) or []
     data_drift_events: List[FeatureDriftEvent] = [FeatureDriftEvent(client_id=int(spec['client_id']), start_round=int(spec['start_round']), feature_dims=[int(d) for d in spec['feature_dims']], shift_magnitude=float(spec.get('shift_magnitude', 2.0)), noise_std=float(spec.get('noise_std', 0.0)), target_node_frac=float(spec.get('target_node_frac', 0.3)), node_selection=spec.get('node_selection', 'high_degree'), kind=spec.get('kind', 'sudden'), transition_rounds=int(spec.get('transition_rounds', 10))) for spec in data_drift_event_specs]
+    if dataset_name == 'drugbank':
+        # Fingerprint column 0 is a bit, not a degree; and the protocol's severe drift (all 50 ogbl-ddi
+        # features) is widened to every fingerprint bit so it keeps the same meaning.
+        for ev in data_drift_events:
+            ev.node_selection = 'random'
+            if ev.feature_dims == list(range(50)):
+                ev.feature_dims = list(range(int(node_features.shape[1])))
     data_drift_simulator: DataDriftSimulator | None = None
     if data_drift_events:
         data_drift_simulator = DataDriftSimulator(
@@ -655,6 +683,10 @@ def main(cfg: DictConfig) -> None:
         'caga_loss_before',
         'caga_loss_after',
         'caga_final_gamma',
+        'val_auroc',
+        'val_aupr',
+        'test_auroc',
+        'test_aupr',
         'fltrust_client_keys',
         'fltrust_cosine',
         'fltrust_trust',
@@ -676,6 +708,11 @@ def main(cfg: DictConfig) -> None:
         row = metrics_history.setdefault(rnd, {'round': rnd})
         row['val_hits20'] = val_h20
         row['test_hits20'] = test_h20
+        _flush_csv()
+
+    def _record_metrics(rnd: int, extra: Dict[str, float]) -> None:
+        row = metrics_history.setdefault(rnd, {'round': rnd})
+        row.update(extra)
         _flush_csv()
 
     def _record_fit(rnd: int, aggregated: Dict[str, float]) -> None:
@@ -812,7 +849,8 @@ def main(cfg: DictConfig) -> None:
         batch_size=cfg.training.batch_size,
         node_dist_enc=dist_enc.to(device) if dist_enc is not None else None,
         using_shared_node_features=True,
-        on_round_eval=_record_server_eval
+        on_round_eval=_record_server_eval,
+        on_round_metrics=_record_metrics
     )
     best_tracker: Dict[str, float] = {}
 

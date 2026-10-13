@@ -53,6 +53,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--drift-level", choices=tuple(DRIFT_LEVELS), default=jp.PROTOCOL["drift_strength"])
     p.add_argument("--out", default="results/cpu_pilot")
     p.add_argument("--data", default=os.path.join(ROOT, "data"))
+    p.add_argument("--dataset", choices=("ogbl-ddi", "drugbank"), default="ogbl-ddi")
+    p.add_argument("--split", choices=("random", "cold"), default="random", help="DrugBank split.")
     p.add_argument("--num-clients", type=int, default=10)
     p.add_argument("--rounds", type=int, default=40)
     p.add_argument("--attack-start", type=int, default=15)
@@ -101,7 +103,7 @@ def load_features(data_root: str, edge_index: torch.Tensor, num_nodes: int, seed
     return feats
 
 
-def build_events(a: argparse.Namespace):
+def build_events(a: argparse.Namespace, num_features: int = 50):
     P = dict(jp.PROTOCOL, attack_start=a.attack_start, poison_strength=a.poison_strength,
              drift_strength=a.drift_level)
     poison_specs, drift_specs = jp.build_specs(P)
@@ -129,6 +131,13 @@ def build_events(a: argparse.Namespace):
                                target_node_frac=s["target_node_frac"], node_selection=s["node_selection"],
                                kind=s["kind"], transition_rounds=s.get("transition_rounds", 10))
              for s in drift_specs[dk]]
+    if a.dataset == "drugbank":
+        # Fingerprint column 0 is a bit, not a degree, so degree-based node selection has no meaning.
+        for e in drift:
+            e.node_selection = "random"
+            # "severe" means every feature, as on ogbl-ddi's 50 structural features.
+            if a.drift_level == "severe":
+                e.feature_dims = list(range(num_features))
     return poison, drift
 
 
@@ -164,19 +173,27 @@ def main() -> None:
     seed_everything(a.seed)
     device = torch.device("cpu")
     cond_tag = a.cond if a.drift_level == "base" or a.cond in ("clean", "poison") else f"{a.cond}-{a.drift_level}"
+    if a.dataset == "drugbank":
+        cond_tag = f"db{a.split}-{cond_tag}"
     run_name = f"{cond_tag}_{a.method}_seed{a.seed}" + (f"_{a.tag}" if a.tag else "")
     out_dir = os.path.join(a.out, run_name)
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "settings.json"), "w") as f:
         json.dump(vars(a), f, indent=1)
 
-    data, evaluator = load_dataset(root=a.data)
-    split = get_edge_split(root=a.data)
-    num_nodes = int(data.num_nodes)
-    graph = data.edge_index
-    node_features = load_features(a.data, graph, num_nodes, a.seed)
-    atc_path = os.path.join(a.data, "ogbl_ddi", "atc_mapping.pt")
-    atc_mapping = torch.load(atc_path) if os.path.exists(atc_path) else None
+    if a.dataset == "drugbank":
+        from src.data.drugbank import load_drugbank
+        data, evaluator, split, node_features, atc_mapping = load_drugbank(os.path.join(a.data, "drugbank"), a.split)
+        num_nodes = int(data.num_nodes)
+        graph = data.edge_index
+    else:
+        data, evaluator = load_dataset(root=a.data)
+        split = get_edge_split(root=a.data)
+        num_nodes = int(data.num_nodes)
+        graph = data.edge_index
+        node_features = load_features(a.data, graph, num_nodes, a.seed)
+        atc_path = os.path.join(a.data, "ogbl_ddi", "atc_mapping.pt")
+        atc_mapping = torch.load(atc_path) if os.path.exists(atc_path) else None
     if atc_mapping is None:
         print("WARNING: no ATC mapping; poisoning 'emerge' has no effect.", flush=True)
     cfg = make_cfg(a, os.path.join(out_dir, "ckpt"))
@@ -200,7 +217,7 @@ def main() -> None:
                                     valid_split=split["valid"], test_split=split["test"], num_nodes=num_nodes,
                                     evaluator=evaluator, cfg=cfg, device=device)
 
-    poison_events, drift_events = build_events(a)
+    poison_events, drift_events = build_events(a, int(node_features.shape[1]))
     poison_sim = PoisoningSimulator(initial_datasets=datasets, train_edges=train_full, atc_mapping=atc_mapping,
                                     events=poison_events, observations_per_client=a.obs_per_client,
                                     seed=a.seed) if poison_events else None
@@ -273,6 +290,9 @@ def main() -> None:
         val = evaluate(eval_trainer.encoder, eval_trainer.predictor, graph, split["valid"]["edge"],
                        split["valid"]["edge_neg"], evaluator, a.batch_size, device)
         row["test_hits20"], row["val_hits20"] = test["Hits@20"], val["Hits@20"]
+        for k in ("auroc", "aupr"):
+            if k in test:
+                row[f"test_{k}"], row[f"val_{k}"] = test[k], val[k]
         reports = [clients[i].evaluate(params, {"server_round": rnd})[2] for i in special]
         for key, col in (("drift_region_Hits@20", "drift_region_hits20"),
                          ("non_drift_region_Hits@20", "non_drift_region_hits20"),
