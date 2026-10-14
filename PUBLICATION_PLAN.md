@@ -157,13 +157,42 @@ Decisions and reasons for `--log-cch`:
 1. ✅ `src/data/poisoning.py`: `PoisonEvent` gains `hide_risk: float` (the fraction of the client's own high-risk positives to drop) and `fabricate_high: float` (fake pairs drawn among drug pairs whose ATC-class combination often carries high-risk interactions). `PoisoningSimulator` receives an `edge_risk` lookup keyed by `(min(u,v), max(u,v))`. Fabricated and hidden pairs are recorded so both metrics can be computed.
 2. ✅ `scripts/cpu_pilot.py` flags: `--hide-high FRAC`, `--fabricate-high FRAC`; attack presets in `scripts/gpu_variant_study.py`: `hideHigh` (2 attackers, frac 0.8, normal-size updates, severe drift), `hideHigh4` (4 attackers), `fabHigh`, `hideHighLIE` (the hidden pairs plus A Little Is Enough).
 3. ✅ Tests: the hidden pairs come only from the high-risk class; the counts match the fraction.
-4. Sanity check: under `hideHigh`, FedAvg's MDIR must rise by at least 0.05 while AUROC moves by less than 0.01. If not, raise the fraction or the attacker count before going on; the paper's premise depends on it.
+4. ✅ (passes with `hideHigh4`, see below) Sanity check: under `hideHigh`, FedAvg's MDIR must rise by at least 0.05 while AUROC moves by less than 0.01. If not, raise the fraction or the attacker count before going on; the paper's premise depends on it.
 
 **Step 3 notes (2026-10-14).** `--hide-high` and `--fabricate-high` keep the protocol's attacker clients and timing (client 0 sudden at round 12, client 1 gradual from round 22) and replace their class-based suppress/emerge attack. Presets: `hideHigh` = joint (severe drift on clients 2–3) + hide 0.8 + normal-size updates; `hideHigh4` adds clients 4 and 5; `fabHigh` = fabricate 0.3; `hideHighLIE` = clients 0–1 hide and clients 4–5 run A Little Is Enough; `drift` = drift only (the control). Decisions and reasons:
 - **Hiding drops the pairs from the attacker's positives**, as specified; they remain in the shared message-passing graph, which the pilot keeps global. This is the weaker, plan-specified form; if the sanity check fails, the next strengthening to consider (after the fraction and attacker count the plan names) is reporting the hidden pairs as explicit negatives.
 - **Fabrication** draws pairs from ATC class pairs whose high-risk share is at least twice the overall share (class pairs with ≥ 100 interactions), weighted by their number of high-risk interactions, and never uses a known interaction. The fraction is relative to the client's observations, like `emerge`; 0.3 matches the moderate attack's emerge strength.
 - **`hideHighLIE` uses different clients for the two parts** because A Little Is Enough overwrites the attacker's whole update, so a client cannot both hide pairs and send a crafted update.
 - **Sanity-check comparison, fixed before seeing results:** the primary comparison is FedAvg under `hideHigh` against FedAvg under `drift` (same severe drift, no hiding), because `hideHigh` includes the drift and the premise is about the hiding; FedAvg `clean` is reported too. Metrics: test MDIR and test AUROC, last-10-round window, mean over tuning seeds 10 and 11 (validation numbers reported alongside). Pass: MDIR up ≥ 0.05 and |ΔAUROC| < 0.01.
+
+**Step 3 sanity check, first attempt (2026-10-14, CPU, `results/paperA_sanity`, FedAvg, DrugBank random split, tuning seeds 10–11, last-10-round means): fails.**
+
+| Condition | Test AUROC | Test MDIR (high) | Val MDIR | Recall high / moderate / low | Mean CCH poisoned / drifted / honest |
+| --- | --- | --- | --- | --- | --- |
+| clean | 0.9305 | 0.4965 | 0.4978 | 0.50 / 0.69 / 0.55 | – / – / 19.6 |
+| drift only | 0.9282 | 0.4708 | 0.4733 | 0.53 / 0.66 / 0.54 | – / 56.4 / 19.0 |
+| `hideHigh` | 0.9286 | 0.5077 | 0.5088 | 0.49 / 0.68 / 0.55 | 24.1 / 53.1 / 18.5 |
+
+- Against drift only (the pre-registered comparison): **MDIR +0.037** (seed 10 +0.024, seed 11 +0.050), AUROC +0.0004. The AUROC half passes; the MDIR half (≥ 0.05) does not. Against clean: MDIR +0.011, AUROC −0.002.
+- The effect is real but small: the attack targets high-risk pairs specifically (high-risk recall drops 0.03–0.05 while moderate and low barely move, and AUROC does not change), which is the premise's shape, but two attackers dropping 80% of their own high-risk pairs is not enough. The model still gives the hidden pairs a mean probability of 0.66.
+- Drift alone *lowered* MDIR against clean (−0.026), about the size of the seed-to-seed spread. So two seeds cannot separate effects much below ~0.03, and "against clean" is a noisy reference here.
+- CCH already ranks the hiders above honest clients (24 vs 18.5 per round), but the severely drifted clients score far higher (53). A harm gate built on CCH would act on drifted clients first. Keep this in mind for step 5 and the paper (it is arguably correct: those clients do hide the most high-risk pairs).
+- Baseline MDIR is about 0.5 at 95% specificity: the scaled-down pilot model misses half of the high-risk interactions even when clean. MDIR should be lower at full scale (step 10).
+
+**Decision (2026-10-14): strengthen by attacker count first, using the planned `hideHigh4` preset (4 attackers, the same fraction of 0.8), on seeds 10–11.** Reason: the fraction can only go from 0.8 to 1.0, which would give at most about 0.046 if the effect is linear, still short; doubling the attackers is the larger lever and is already in the attack table. If `hideHigh4` passes, it becomes the headline attack for criterion 1, and `hideHigh` stays as the weaker row. If it does not, the next step is reporting hidden pairs as explicit negatives (a stronger and realistic form: the hospital records them as "no interaction"), which needs a small trainer change.
+
+**Step 3 sanity check, second attempt (2026-10-14, `hideHigh4`, same setup): passes.**
+
+| Condition | Test AUROC | Test MDIR | Val MDIR | Recall high | Mean CCH poisoned / drifted / honest |
+| --- | --- | --- | --- | --- | --- |
+| drift only | 0.9282 | 0.4708 | 0.4733 | 0.53 | – / 56.4 / 19.0 |
+| `hideHigh` | 0.9286 | 0.5077 | 0.5088 | 0.49 | 24.1 / 53.1 / 18.5 |
+| `hideHigh4` | 0.9259 | **0.5391** | 0.5412 | 0.46 | 21.0 / 46.5 / 19.2 |
+
+- Against drift only: **MDIR +0.068** (seed 10 +0.054, seed 11 +0.083, both above 0.05), **AUROC −0.002** (validation: +0.068 and −0.003). Criterion 1 passes on both seeds and on both validation and test.
+- Against clean the rise is +0.043 MDIR with −0.005 AUROC, under 0.05. The pre-registered comparison is drift only, so this does not change the verdict, but the paper must report both and say why drift only is the right reference (the attack runs with the same drift).
+- **Decision: `hideHigh4` is the headline attack for criterion 1 and the main tables; `hideHigh` stays as the weaker row** (it shows the dose response: 2 attackers +0.037, 4 attackers +0.068). The explicit-negatives variant is not needed now.
+- **Warning for step 5: with 4 hiders, CCH no longer separates them from honest clients (21.0 vs 19.2 per round).** Leave-one-out removes one attacker at a time, and the other three still pull the model the same way, so each attacker's marginal harm looks small (the attackers mask each other). Drifted clients still score highest. A harm gate that tests clients one at a time will likely miss coordinated hiders. Before tuning, step 5 should consider a group-aware variant (for example, scoring each client against an aggregate of only the clients CAGA already accepts, or leaving out clusters of similar updates) and test it on `hideHigh4`.
 
 **Step 4: baselines (about 1–2 days).** In `src/training/robust_aggregation.py`, numpy only, using the same clean probe as CAGA:
 1. ✅ `lfr_aggregate`: for each client, the probe loss of the aggregate without it; remove the c clients whose removal lowers the loss most; average the rest. c = the true number of attackers (Fang et al.'s assumption, favourable to LFR).
