@@ -202,6 +202,51 @@ nbs = {
         code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_tune_harm"),
         md("## 5. Package results"), PACK],
 }
+# Step 7 (Paper A main results): fresh seeds 12-16, frozen settings (PUBLICATION_PLAN.md, "Frozen for step 7").
+ALL9 = "fedavg normclip fltrust lfr zeno median krum caga harm_rep_d2"
+SIX = "fedavg normclip fltrust lfr zeno caga"
+MAIN = [  # (file, title, dataset, split, [(methods, attacks)], hours)
+    ("01_db_core_a", "DrugBank random split: no attack, drift, two and four hiders", "drugbank", "random",
+     [(ALL9, "clean drift hideHigh hideHigh4")], "6 to 7"),
+    ("02_db_core_b", "DrugBank random split: fabrication, moderate poisoning, A Little Is Enough", "drugbank", "random",
+     [(ALL9, "fabHigh moderate testB")], "5 to 6"),
+    ("03_db_cold", "DrugBank cold-drug split: no attack, two hiders, A Little Is Enough", "drugbank", "cold",
+     [(ALL9, "clean hideHigh testB")], "5 to 6"),
+    ("04_db_model_a", "DrugBank random split: sign flip, Gaussian, IPM, min-max", "drugbank", "random",
+     [(SIX, "signflip gauss ipm minmax")], "4 to 5"),
+    ("05_db_model_b", "DrugBank random split: min-sum, strong poisoning, test A, hiding plus A Little Is Enough",
+     "drugbank", "random", [(SIX, "minsum strong testA hideHighLIE")], "4 to 5"),
+    ("06_ogbl_a", "ogbl-ddi: no attack and strong poisoning", "ogbl-ddi", "random", [(SIX, "clean strong")], "6 to 8"),
+    ("07_ogbl_b", "ogbl-ddi: test A and A Little Is Enough", "ogbl-ddi", "random", [(SIX, "testA testB")], "6 to 8"),
+    ("08_ogbl_c", "ogbl-ddi: min-max", "ogbl-ddi", "random", [(SIX, "minmax")], "3 to 4"),
+]
+for key, title, dataset, split, blocks, hours in MAIN:
+    out = f"/kaggle/working/results/main_{key}"
+    n_runs = sum(len(m.split()) * len(a.split()) * 5 for m, a in blocks)
+    db = dataset == "drugbank"
+    cells = [md(f"# FedDDI-CAGA Paper A, step 7 ({key[:2]} of 08): {title}" + NL + NL + HEAD + NL + NL
+                + ((PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL) if db else "")
+                + f"Main results on fresh seeds 12 to 16 (never used before), frozen settings. {n_runs} runs, about "
+                f"{hours} hours. If the session stops, run it again: finished runs are skipped."),
+             md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
+    if db:
+        cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
+                  bash(PIP, "cd /kaggle/working/fedddi", "grep -q model_attack scripts/cpu_pilot.py || "
+                       "{ echo 'old fedddi_code.zip: upload the latest one'; exit 1; }")]
+    else:
+        cells += [md("## 2. Install and download ogbl-ddi (~5 min)"), stage('setup'),
+                  bash("cd /kaggle/working/fedddi", "grep -q model_attack scripts/cpu_pilot.py || "
+                       "{ echo 'old fedddi_code.zip: upload the latest one'; exit 1; }")]
+    cells.append(md("## 3. Runs (live progress below)"))
+    for methods, attacks in blocks:
+        cells.append(code(f"!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset {dataset} "
+                          f"--split {split} --seeds 12 13 14 15 16 --methods {methods} --attacks {attacks} "
+                          f"--device cuda --parallel 3 --out {out}"))
+    cells += [md("## 4. Summary table"),
+              code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
+              md("## 5. Package results"), PACK]
+    nbs[f"fedddi_main_{key}.ipynb"] = cells
+
 for name, cells in nbs.items():
     json.dump({"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
                "language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}, open('results/kaggle/' + name, 'w'), indent=1)
