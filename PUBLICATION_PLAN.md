@@ -4,11 +4,17 @@ The plan for turning FedDDI-CAGA into a journal paper. Tick items off as they ar
 
 **Start here:** the active plan is **"Paper A: safety-critical poisoning and harm-gated aggregation"** below, which lists the environment, file locations and the exact steps. The earlier sections are the evidence it builds on.
 
-Last updated: 2026-10-14 (Paper A steps 1–4 implemented).
+Last updated: 2026-10-14 (Paper A steps 1–4 implemented; seeds 5–7 confirmation failed).
 
 ## Current verdict and outlook (2026-10-14)
 
-**Provisional verdict: pursue publication with CAGA as the method, framed around crafted attacks.** It becomes final once the fresh-seed confirmation (seeds 5–7, both datasets) passes the criteria in Phase 2.
+**Update (2026-10-14, after the seeds 5–7 confirmation): the crafted-attack method claim failed on both datasets and is dropped. Paper A (next section) is the plan; the rest of this section is kept as the record of the earlier verdict.** What changes for Paper A:
+- Contributions 1, 2 and 4 (threat model, CCH/MDIR/DRR metrics, benchmark) do not depend on CAGA and are unaffected. The step 3 sanity check already showed the premise holds (`hideHigh4`: MDIR +0.068 at unchanged AUROC).
+- Contribution 3 (harm-gated CAGA beating FLTrust, LFR and Zeno, pass criterion 3) is now less likely. Plain CAGA only ties FLTrust on DrugBank, excludes 33–47% of honest client-rounds there (47% with no attack, which threatens the "no-attack cost ≤ 0.005" part of criterion 3), and per-client CCH cannot separate four coordinated hiders (step 3 notes). Revised subjective odds that criterion 3 passes: about 25–35% (before: roughly even).
+- So the most likely paper is the pre-planned fallback: **threat, metric and benchmark, with CAGA as one of several defenses** (criteria 1, 2 and 4). Its Q1 odds are mostly unchanged, because that version never relied on CAGA winning. The general-attack results become a supporting section: no defense dominates; FLTrust is strongest on DrugBank; CAGA resists A Little Is Enough where FLTrust collapses on ogbl-ddi.
+- Step 5 should be time-boxed (about 2 days): fix the false-exclusion rate and test a group-aware harm gate on `hideHigh4` on tuning seeds before spending GPU time on step 6. If it cannot beat FLTrust's validation MDIR on `hideHigh4` there, skip ahead with plain CAGA as a baseline and put the effort into criteria 2 and 4, the adaptive attacker and the writing.
+
+**Earlier provisional verdict (superseded): pursue publication with CAGA as the method, framed around crafted attacks.** It becomes final once the fresh-seed confirmation (seeds 5–7, both datasets) passes the criteria in Phase 2.
 
 **Claim:** CAGA, a clean-probe gating rule for federated drug-interaction prediction, matches state-of-the-art defenses against standard poisoning and drift, and is the only defense tested that resists crafted "A Little Is Enough" attacks. Size- and similarity-based defenses miss them because CAGA judges an update's effect, not its appearance.
 
@@ -39,7 +45,7 @@ Last updated: 2026-10-14 (Paper A steps 1–4 implemented).
 Estimate: better-than-even odds that the confirmation passes on at least one dataset. A Q1 biomedical-informatics paper is realistic if it passes **and** CAGA still beats LFR/Zeno on crafted attacks, in roughly 4–8 more weeks. If LFR matches CAGA, the empirical study is still publishable, but probably not at A level.
 
 **A-level checklist:**
-- [ ] Fresh-seed confirmation (seeds 5–7, running on Kaggle), then 5 or more seeds in the final tables.
+- [x] Fresh-seed confirmation (seeds 5–7): **failed** on 2026-10-14 (see Phase 2). Final tables still need 5 or more seeds.
 - [ ] **Closest baselines: Fang's LFR/ERR and Zeno**, plus Krum, coordinate median, trimmed mean, ideally FLAME.
 - [ ] Adaptive attacker that knows CAGA's rule and stays under its tolerance.
 - [ ] Full-scale GPU tables with the learning-rate decay.
@@ -119,7 +125,7 @@ Why this is the best chance (assessed 2026-10-14): it degrades gracefully. If th
 
 ### Pending from before this decision
 
-- [ ] Kaggle `fedddi_confirm_drugbank.ipynb` (84 runs, seeds 5–7) and `fedddi_confirm_ogbl.ipynb` (60 runs) for the crafted-attack claim. Its first attempt failed because the DrugBank dataset was not attached. Their results become the "general attacks" section of Paper A; evaluate them against the criteria in Phase 2.
+- [x] (2026-10-14: done, the crafted-attack claim **fails**; see Phase 2, "Confirmation on fresh seeds 5–7") Kaggle `fedddi_confirm_drugbank.ipynb` (84 runs, seeds 5–7) and `fedddi_confirm_ogbl.ipynb` (60 runs) for the crafted-attack claim. Its first attempt failed because the DrugBank dataset was not attached. Their results become the "general attacks" section of Paper A; evaluate them against the criteria in Phase 2.
 - [ ] Kaggle `fedddi_lrdecay.ipynb` and `fedddi_centralized.ipynb` (methods section: learning-rate decay and centralized ceilings).
 
 ### Exact steps
@@ -435,12 +441,34 @@ Joint condition with severe drift, 2 seeds, test Hits@20 over rounds 31–40:
 - [x] **GPU variant study (DrugBank, seeds 10–11, Kaggle):** validation AUROC 0.88–0.94. FLTrust and CAGA beat FedAvg and norm clipping under every attack; CAGA vs FLTrust is −0.004 (moderate), −0.001 (A) and +0.007 (B). The class-aware probe is exploitable: attackers inject fake edges into classes they do not hold, which it ignores. Reputation fixed the false alarms (honest clients 100% accepted) but let attackers through. **Decision: plain CAGA stays; both variants become negative ablations.**
 - [x] **DrugBank CPU tuning (2026-10-14), seeds 10–11, validation AUROC.** Centralized (1 client) 0.967; clean FedAvg 0.935, so federation costs about 0.03. Severe fingerprint drift alone costs FedAvg only 0.005. Under moderate poisoning plus drift: FedAvg 0.925, norm clip ×1.0 0.930 (×2.0 0.926), FLTrust 20k 0.937 (10k 0.936), CAGA warm-up 5 0.933 (`tol_z` 1 0.933). **CAGA without warm-up collapsed on seed 11 (0.665)**, so the warm-up is necessary on DrugBank. The frozen ogbl-ddi settings carry over unchanged; the confirmation notebooks already use them.
 - **Decision (2026-10-14): keep CAGA as the method.** Claim: probe-based gating catches crafted attacks (A Little Is Enough) that fool magnitude-based and similarity-based defenses, and matches them elsewhere.
-- [ ] **Confirmation on fresh seeds 5–7 (Kaggle GPU), criteria fixed before running:**
+- [x] **Confirmation on fresh seeds 5–7 (Kaggle GPU), criteria fixed before running:** (outcome below: **fails**)
   1. On test B, CAGA beats FLTrust and norm clipping on both datasets, with the paired interval over the 3 seeds clear of zero (DrugBank: test AUROC; ogbl-ddi: test Hits@20).
   2. On the other attacks, CAGA is no more than 0.01 AUROC (DrugBank) or 0.02 Hits@20 (ogbl-ddi) worse than FLTrust.
   3. Stress tests: with only 2 attackers (`testB2`) and with a larger shift, z = 2 (`testBz2`), CAGA stays at least as good as FLTrust.
 
   If 1 fails on either dataset, the claim narrows to the dataset where it holds, or the paper becomes the empirical study.
+
+  **Outcome (2026-10-14): criterion 1 fails on both datasets, so the crafted-attack method claim is dropped.** All 144 runs complete (ogbl-ddi 60, DrugBank 84; 40 rounds each); results in the git-ignored `results/kaggle_confirm_s5-7/`. Metric: last-10-round mean of test Hits@20 (ogbl-ddi) or test AUROC (DrugBank). Differences are CAGA minus the baseline, paired over seeds 5–7, with 95% t-intervals (2 degrees of freedom).
+
+  | Dataset, attack | CAGA | FLTrust | Norm clip | FedAvg | CAGA − FLTrust | CAGA − norm clip |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | ogbl, test B | 0.054 | 0.026 | 0.042 | 0.051 | **+0.028** [+0.002, +0.054] | +0.013 [−0.042, +0.067] |
+  | DrugBank, test B | 0.910 | 0.907 | 0.875 | 0.878 | +0.002 [−0.030, +0.035] | **+0.035** [+0.009, +0.061] |
+  | ogbl, clean / strong | 0.093 / 0.077 | 0.109 / 0.082 | 0.093 / 0.065 | 0.086 / 0.041 | −0.016 / −0.005 | +0.000 / +0.012 |
+  | DrugBank, clean / moderate / strong / test A | 0.930 / 0.929 / 0.929 / 0.920 | 0.932 / 0.932 / 0.931 / 0.922 | 0.928 / 0.923 / 0.922 / 0.907 | 0.927 / 0.919 / 0.747 / 0.904 | −0.002 / −0.003 / −0.002 / −0.002 | +0.002 / +0.005 / +0.007 / +0.013 |
+  | ogbl, test B2 / test Bz2 | 0.063 / 0.048 | 0.040 / 0.037 | 0.074 / 0.023 | 0.081 / 0.027 | +0.023 / +0.012 | −0.011 / +0.026 |
+  | DrugBank, test B2 / test Bz2 | 0.924 / 0.884 | 0.925 / 0.914 | 0.922 / 0.708 | 0.922 / 0.651 | −0.001 / **−0.029** | +0.002 / +0.177 |
+
+  1. **Fails.** CAGA must beat both FLTrust and norm clipping on test B with the interval clear of zero, on both datasets. On ogbl-ddi it beats FLTrust (all 3 seeds, now replicated on seeds 2–4 and 5–7) but not norm clipping (seed 6 −0.013). On DrugBank it beats norm clipping but only ties FLTrust (per seed −0.002, +0.017, −0.009). It holds on neither dataset in full.
+  2. **Passes.** On the other attacks CAGA is at most 0.003 AUROC (DrugBank) and 0.016 Hits@20 (ogbl-ddi, clean) below FLTrust, inside the 0.01 and 0.02 margins. FLTrust is ahead in every DrugBank row, by 0.002–0.003, consistently across seeds (DrugBank moderate: interval −0.006 to −0.0004).
+  3. **Fails on DrugBank.** test Bz2: −0.029 (seed 7 −0.072); test B2: −0.001, effectively a tie but not "at least as good". On ogbl-ddi CAGA stays ahead of FLTrust in both stress tests (intervals include zero).
+
+  What else the runs show:
+  - **The ogbl-ddi test-B win shrank.** On seeds 2–4 CAGA scored 0.097 against about 0.060 for every baseline; on seeds 5–7 it scored 0.054, barely above FedAvg (+0.003). It still beats FLTrust, because FLTrust collapses under A Little Is Enough on ogbl-ddi (0.026, below FedAvg), but it no longer recovers the clean level (0.093).
+  - **CAGA's false alarms are worse than measured before.** Honest client-rounds not fully accepted, after round 22: ogbl-ddi 18–26%; **DrugBank 33–47%, and 47% with no attack at all.** Under test B on DrugBank it fully accepted the attackers in 16% of rounds.
+  - **FLTrust is the strongest general-purpose defense on DrugBank.** It is best or tied in every row and only loses ground to CAGA under test Bz2 on ogbl-ddi.
+
+  **Decision (2026-10-14):** following the decision points written in advance ("on neither → empirical study"), the stand-alone CAGA method paper is dropped. Paper A continues as the active plan, because it was built not to depend on this result (see "Current verdict"). These runs become its "general attacks" section and a second, honest finding: no single defense wins everywhere, and similarity-based FLTrust fails only under crafted attacks on ogbl-ddi.
 - [ ] **CAGA revamp (2026-10-13), under test on GPU.** Diagnosis from test A and the held-out runs: CAGA gates whole clients although attackers poison only part of their data; it mistakes honest non-IID specialists for attackers (16–26% of honest client-rounds blocked, even with no attack); and each round is judged alone on a noisy probe. Two opt-in fixes in `src/training/caga.py`, with tests in `tests/test_caga.py`:
   - **class-aware probe** (`class_aware`): a client is judged only on probe pairs from the drug classes it holds, weighted by its share of each;
   - **reputation** (`reputation`, `rep_beta`, `rep_threshold`): a running average of each client's leave-one-out harm; only clients with a bad record may be gated, and the warm-up rounds build that record.
