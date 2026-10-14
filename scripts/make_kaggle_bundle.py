@@ -110,15 +110,15 @@ nbs = {
         md("# FedDDI-CAGA Paper A, step 6a: baselines under safety-critical attacks (DrugBank, GPU)" + NL + NL + HEAD + NL + NL
            + PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels** (built with "
            "`scripts/prepare_drugbank.py --risk-only`); the notebook stops if the labels are missing." + NL + NL +
-           "90 runs on tuning seeds 10 and 11: FedAvg, norm clipping, FLTrust, LFR, Zeno, coordinate median, CAGA and "
-           "calibrated CAGA under hideHigh, hideHigh4, fabHigh, moderate and test B. About 3 to 4 hours. If the session "
+           "108 runs on tuning seeds 10 and 11: FedAvg, norm clipping, FLTrust, LFR, Zeno, coordinate median, CAGA and "
+           "calibrated CAGA with no attack and under hideHigh, hideHigh4, fabHigh, moderate and test B. About 4 to 5 hours. If the session "
            "stops, run it again: finished runs are skipped."),
         md("## 1. Copy the code and the DrugBank file"), COPY, COPY_DB, CHECK_RISK,
         md("## 2. Install packages"), bash(PIP),
         md("## 3. Runs (live progress below)"),
         code("!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset drugbank --seeds 10 11 "
-             "--methods fedavg normclip fltrust lfr zeno median caga caga_cal "
-             "--attacks hideHigh hideHigh4 fabHigh moderate testB "
+             "--methods fedavg normclip fltrust lfr zeno median caga caga_cal2 "
+             "--attacks clean hideHigh hideHigh4 fabHigh moderate testB "
              "--device cuda --parallel 3 --out /kaggle/working/results/paperA_tune"),
         md("## 4. Summary table"),
         code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_tune"),

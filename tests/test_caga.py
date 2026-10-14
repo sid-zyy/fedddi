@@ -414,3 +414,20 @@ def test_harm_gate_needs_scores_and_rejects_unknown_mode():
     with pytest.raises(ValueError):
         caga_round(old, clients, [str(i) for i in range(10)], [1.0] * 10, BLOCK_MAP, loss_fn,
                    CAGAHyperparams(harm_gate=True, harm_mode="pairs"), 1, score_fn=score_fn, probe_risk=risk)
+
+
+def test_cap_final_check_takes_a_slightly_worse_full_step_that_the_z_check_refuses():
+    # Honest averaging that raises the probe loss a little but significantly: "z" refuses it, "cap" takes it.
+    old, _, base_loss, toward, _ = make_env(0, n_samples=4000)
+    loss_fn = lambda a: base_loss(a) + 1.0  # noqa: E731  a loss floor, as a real ranking loss has
+    start = toward(0.9)
+    clients = [toward(1.2)] * 4  # overshoots the optimum slightly: best step is about 1/3 of the way
+    kw = dict(gate_blocks=False, max_sweeps=0)
+    z = caga_round(start, clients, list("abcd"), [1.0] * 4, BLOCK_MAP, loss_fn, CAGAHyperparams(**kw), 9)[1]
+    cap = caga_round(start, clients, list("abcd"), [1.0] * 4, BLOCK_MAP, loss_fn,
+                     CAGAHyperparams(final_check_mode="cap", **kw), 9)[1]
+    assert z.final_gamma < 1.0 and cap.final_gamma == 1.0
+    assert cap.loss_after <= 1.1 * min(cap.loss_before, z.loss_after) + 1e-4  # still within the cap
+    with pytest.raises(ValueError):
+        caga_round(start, clients, list("abcd"), [1.0] * 4, BLOCK_MAP, loss_fn,
+                   CAGAHyperparams(final_check_mode="x", **kw), 9)

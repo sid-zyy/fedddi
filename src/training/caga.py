@@ -46,6 +46,12 @@ class CAGAHyperparams:
     gate_order: Tuple[str, ...] = ("feature_proj", "mlp", "convs")
     gate_blocks: bool = True
     final_check: bool = True
+    # "z": the largest step size not significantly worse than the best (paired test, plus the
+    # max_rel_increase cap). "cap": only the cap, i.e. take the full step unless it raises the mean probe
+    # loss by more than max_rel_increase. The paired test has the same flaw the outlier gate fixes: with
+    # thousands of probe samples a tiny loss increase is "significant", so once no client is gated the
+    # plain average of honest non-IID updates is refused and training stalls (seen on DrugBank, 2026-10-14).
+    final_check_mode: str = "z"
     # Rounds 1..warmup_rounds use plain weighted averaging. Early in training honest non-IID updates
     # disagree most, and gating them then is mostly false positives.
     warmup_rounds: int = 0
@@ -406,8 +412,16 @@ def caga_round(
         if check:
             # tol_rel sets how large a gating improvement must be; it must not loosen this check,
             # because min_gain grows with the damage done by the round's aggregate.
-            gamma = select_largest_within_noise(list(gl.keys()), gl, hp.tol_z, hp.tol_abs,
-                                                max_rel_increase=hp.max_rel_increase)
+            if hp.final_check_mode == "cap":
+                best_mean = min(float(v.mean()) for v in gl.values())
+                ok = [g for g, v in gl.items()
+                      if float(v.mean()) <= best_mean + hp.max_rel_increase * abs(best_mean) + hp.tol_abs]
+                gamma = max(ok)
+            elif hp.final_check_mode == "z":
+                gamma = select_largest_within_noise(list(gl.keys()), gl, hp.tol_z, hp.tol_abs,
+                                                    max_rel_increase=hp.max_rel_increase)
+            else:
+                raise ValueError(f"unknown final_check_mode {hp.final_check_mode!r}")
         after_mean = float(gl[gamma].mean())
 
     new_arrays = _combine(old_arrays, agg, block_map, {b: gamma for b in all_blocks})

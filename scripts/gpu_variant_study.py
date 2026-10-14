@@ -33,13 +33,16 @@ METHODS = {
     # Calibrated eligibility (fixes false alarms on honest non-IID clients): outlier gate, plus warm-up baseline.
     "caga_out": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-outlier"],
     "caga_cal": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-outlier", "--caga-baseline"],
+    # The same with the final check reduced to the divergence cap (caga_cal stalls once nobody is gated).
+    "caga_cal2": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-outlier", "--caga-baseline",
+                  "--caga-final-check", "cap"],
     # Harm-gated CAGA (Paper A, step 5): risk-stratified secret probe (half high-risk), CCH tolerance 0.01.
     # "loo" is the plan's leave-one-out CCH; "solo" judges each client's own model (not masked by other
     # attackers) and calibrates it like caga_cal, so honest specialists' steady offset does not count.
     "caga_harm": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-harm-gate", "--caga-harm-mode", "loo",
-                  "--caga-secret-probe"],
+                  "--caga-secret-probe", "--caga-final-check", "cap"],
     "caga_harm_solo": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-harm-gate", "--caga-harm-mode", "solo",
-                       "--caga-secret-probe", "--caga-outlier", "--caga-baseline"],
+                       "--caga-secret-probe", "--caga-outlier", "--caga-baseline", "--caga-final-check", "cap"],
     # Paper A baselines (step 4); LFR, ERR and Zeno use CAGA's clean probe.
     "lfr": ["--method", "lfr"],
     "err": ["--method", "err"],

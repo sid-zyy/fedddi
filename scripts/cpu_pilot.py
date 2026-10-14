@@ -114,6 +114,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--caga-outlier-k", type=float, default=3.0)
     p.add_argument("--caga-baseline", action="store_true",
                    help="With --caga-outlier: subtract each client's warm-up score first.")
+    p.add_argument("--caga-final-check", choices=("z", "cap"), default="z",
+                   help="CAGA's final step-size check: paired test (z) or only the divergence cap (cap).")
     p.add_argument("--caga-harm-gate", action="store_true",
                    help="Harm-gated CAGA (Paper A): gate only clients whose CCH on the probe exceeds the tolerance.")
     p.add_argument("--caga-harm-tol", type=float, default=0.01,
@@ -328,7 +330,8 @@ def main() -> None:
                          tol_rel=a.caga_tol_rel, warmup_rounds=a.caga_warmup, class_aware=a.caga_class_aware,
                          reputation=a.caga_reputation, rep_beta=a.caga_rep_beta, rep_threshold=a.caga_rep_threshold,
                          outlier_gate=a.caga_outlier, outlier_k=a.caga_outlier_k, baseline_gate=a.caga_baseline,
-                         harm_gate=a.caga_harm_gate, harm_tol=a.caga_harm_tol, harm_mode=a.caga_harm_mode)
+                         harm_gate=a.caga_harm_gate, harm_tol=a.caga_harm_tol, harm_mode=a.caga_harm_mode,
+                         final_check_mode=a.caga_final_check)
     if a.caga_harm_gate and not has_risk:
         raise SystemExit("--caga-harm-gate needs risk labels (DrugBank)")
     caga_state: Dict[str, Any] = {}
