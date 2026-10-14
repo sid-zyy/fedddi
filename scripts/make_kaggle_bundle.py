@@ -216,15 +216,17 @@ MAIN = [  # (file, title, dataset, split, [(methods, attacks)], hours)
      [(SIX, "signflip gauss ipm minmax")], "4 to 5"),
     ("05_db_model_b", "DrugBank random split: min-sum, strong poisoning, test A, hiding plus A Little Is Enough",
      "drugbank", "random", [(SIX, "minsum strong testA hideHighLIE")], "4 to 5"),
-    ("06_ogbl_a", "ogbl-ddi: no attack and strong poisoning", "ogbl-ddi", "random", [(SIX, "clean strong")], "6 to 8"),
-    ("07_ogbl_b", "ogbl-ddi: test A and A Little Is Enough", "ogbl-ddi", "random", [(SIX, "testA testB")], "6 to 8"),
-    ("08_ogbl_c", "ogbl-ddi: min-max", "ogbl-ddi", "random", [(SIX, "minmax")], "3 to 4"),
+    ("06_ogbl_clean", "ogbl-ddi: no attack", "ogbl-ddi", "random", [(SIX, "clean")], "3 to 4"),
+    ("07_ogbl_strong", "ogbl-ddi: strong poisoning", "ogbl-ddi", "random", [(SIX, "strong")], "3 to 4"),
+    ("08_ogbl_testA", "ogbl-ddi: test A", "ogbl-ddi", "random", [(SIX, "testA")], "3 to 4"),
+    ("09_ogbl_testB", "ogbl-ddi: A Little Is Enough", "ogbl-ddi", "random", [(SIX, "testB")], "3 to 4"),
+    ("10_ogbl_minmax", "ogbl-ddi: min-max", "ogbl-ddi", "random", [(SIX, "minmax")], "3 to 4"),
 ]
 for key, title, dataset, split, blocks, hours in MAIN:
     out = f"/kaggle/working/results/main_{key}"
     n_runs = sum(len(m.split()) * len(a.split()) * 5 for m, a in blocks)
     db = dataset == "drugbank"
-    cells = [md(f"# FedDDI-CAGA Paper A, step 7 ({key[:2]} of 08): {title}" + NL + NL + HEAD + NL + NL
+    cells = [md(f"# FedDDI-CAGA Paper A, step 7 ({key[:2]} of 10): {title}" + NL + NL + HEAD + NL + NL
                 + ((PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL) if db else "")
                 + f"Main results on fresh seeds 12 to 16 (never used before), frozen settings. {n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),

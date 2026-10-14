@@ -264,7 +264,7 @@ Test, criteria fixed before running (CPU, DrugBank random, tuning seeds 10–11,
 - ogbl-ddi: the general attacks only (no risk labels): `clean`, `strong`, `testA`, `testB`, `minmax`.
 - ✅ Add `signflip`, `gauss`, `minmax`, `minsum` and `ipm` attack presets first (step 4 style, in the pilot's update-replacement hook next to `lie_updates`). Done 2026-10-14: `src/training/model_attacks.py`, `tests/test_model_attacks.py`, pilot `--model-attack --model-attack-clients --ipm-eps --gauss-scale`, presets of the same names (clients 0, 1, 4, 5 attack from round 12, severe drift on 2–3, like test B). Definitions: sign flip = the attacker's own update reversed; Gaussian = noise with the honest updates' per-coordinate spread; IPM = −0.5 × the honest mean (Xie et al.); min-max / min-sum = honest mean + γ·(−std, unit length) with the largest γ keeping the attacker within the honest clients' largest pairwise distance / largest sum of squared distances (Shejwalkar & Houmansadr). All are omniscient, as A Little Is Enough.
 
-**Step 7 notebooks (built 2026-10-14; `results/kaggle/fedddi_main_0*.ipynb`, 840 runs, seeds 12–16, frozen settings).** Run them in this order; the first three hold the paper's core tables.
+**Step 7 notebooks (built 2026-10-14; `results/kaggle/fedddi_main_*.ipynb`, 840 runs, seeds 12–16, frozen settings).** Each notebook can resume from an earlier session's output attached as input (step 3 of the notebook); ogbl-ddi is split one attack per notebook so no session nears Kaggle's 12-hour limit. Run them in this order; the first three hold the paper's core tables.
 
 | # | Notebook | Content | Runs | Est. GPU hours |
 | --- | --- | --- | --- | --- |
@@ -273,9 +273,7 @@ Test, criteria fixed before running (CPU, DrugBank random, tuning seeds 10–11,
 | 3 | `main_03_db_cold` | DrugBank cold-drug: clean, hideHigh, testB × 9 | 135 | 5–6 |
 | 4 | `main_04_db_model_a` | DrugBank random: sign flip, Gaussian, IPM, min-max × 6 | 120 | 4–5 |
 | 5 | `main_05_db_model_b` | DrugBank random: min-sum, strong, test A, hideHighLIE × 6 | 120 | 4–5 |
-| 6 | `main_06_ogbl_a` | ogbl-ddi: clean, strong × 6 | 60 | 6–8 |
-| 7 | `main_07_ogbl_b` | ogbl-ddi: test A, test B × 6 | 60 | 6–8 |
-| 8 | `main_08_ogbl_c` | ogbl-ddi: min-max × 6 | 30 | 3–4 |
+| 6–10 | `main_06_ogbl_clean`, `07_ogbl_strong`, `08_ogbl_testA`, `09_ogbl_testB`, `10_ogbl_minmax` | ogbl-ddi: one attack each × 6 | 30 each | 3–4 each |
 
 "9 methods" = FedAvg, norm clip, FLTrust, LFR, Zeno, median, Krum, CAGA, harm reputation δ 0.2; "6" drops median, Krum and harm reputation (secondary attacks and ogbl-ddi, where there are no risk labels). Decisions and reasons: the plan's full matrix (every attack × every method × 5 seeds) would be about 1,200 runs; the secondary attacks and ogbl-ddi use the six methods that matter for the comparison (median and Krum already fail on DrugBank tuning; harm reputation needs risk labels). Total about 40–50 GPU hours, more than one week of Kaggle's free GPU quota (about 30 h/week), so the order above puts the core tables first. A CPU smoke run covered every new combination (cold split with harm reputation and Krum, hideHighLIE, model attacks on ogbl-ddi with LFR and Zeno).
 
