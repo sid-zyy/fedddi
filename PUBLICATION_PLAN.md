@@ -359,6 +359,27 @@ What it means:
 
 **Decision (2026-10-14):** candidate CAGA claims for step 7–8, to be tested on seeds 12–16 and stated only if they replicate: (1) "CAGA degrades least as the number of attackers grows, and has the lowest MDIR with a malicious majority" (add `hide6` and a 6-attacker A Little Is Enough variant with a fixed z to step 8); (2) "CAGA identifies attackers even when they are few, where leave-one-out defenses do not"; (3) "against an under-estimated attacker count, CAGA beats LFR and Zeno". The claim "CAGA needs no attacker count" is not made without the qualifier in (3), because a high guess matches it.
 
+**Step 6d result (2026-10-14, Kaggle, 36 runs, `results/kaggle_harm_rep/`, correct code: cap-only final check, harm reputation on): no δ qualifies; the harm defense is a negative result.**
+
+| Method | Val AUROC − FLTrust: fabHigh / hideHigh / hideHigh4 / moderate / testB | Val MDIR: clean / hideHigh / hideHigh4 / testB | Attackers excluded: hideHigh / hideHigh4 / moderate / testB | Honest false exclusion (clean) |
+| --- | --- | --- | --- | --- |
+| harm rep δ 0.1 | −0.004 / −0.005 / −0.005 / −0.005 / **−0.014** | 0.496 / 0.470 / 0.510 / 0.635 | 0.36 / 0.22 / 0.93 / 0.00 | 0.15 |
+| harm rep δ 0.2 | −0.004 / −0.006 / −0.005 / −0.004 / **−0.010** | 0.478 / 0.471 / 0.519 / 0.587 | 0.46 / 0.13 / 0.91 / 0.00 | 0.09 |
+| harm rep δ 0.3 | −0.005 / −0.006 / −0.005 / −0.005 / **−0.011** | 0.479 / 0.482 / 0.526 / 0.619 | 0.17 / 0.09 / 0.58 / 0.00 | 0.05 |
+| CAGA | −0.004 / −0.006 / −0.003 / −0.004 / +0.007 | 0.462 / 0.482 / 0.506 / 0.543 | 0.58 / 0.36 / 1.00 / 0.83 | 0.49 |
+| FLTrust | 0 | 0.455 / **0.443** / 0.499 / 0.579 | 0.13 / 0.08 / 0.46 / 0.05 | 0.04 |
+| Zeno | −0.003 / −0.006 / +0.002 / −0.005 / +0.008 | 0.468 / 0.502 / **0.495** / 0.545 | 0.04 / 0.26 / 0.50 / 0.81 | 0.20 |
+
+- **Selection rule:** every δ misses the AUROC constraint under test B (0.010–0.014 below FLTrust) and narrowly under hideHigh (0.005–0.006). (Plain CAGA would also miss it under hideHigh, by 0.0009.)
+- **Even ignoring the constraint, harm reputation does not beat FLTrust on hiding MDIR:** best mean over hideHigh and hideHigh4 is 0.490 (δ 0.1) against FLTrust 0.471, Zeno 0.499, CAGA 0.494. Per seed, δ 0.1 beats FLTrust only under hideHigh4 on seed 11 (0.476 vs 0.485).
+- **It does not see A Little Is Enough** (0% of attacker rounds excluded, AUROC 0.893–0.897), because a crafted update need not hide high-risk pairs; a harm-only gate is blind to attacks that are not about harm.
+- **What worked:** far fewer false alarms than CAGA (4–15% vs 29–49% of honest client-rounds), and it still catches moderate poisoning (58–93%). Its no-attack cost is small (val AUROC 0.933–0.935 vs FedAvg 0.933).
+- **Representative δ for later tables: 0.2**, by the selection rule's own tie-break with the AUROC constraint dropped (δ 0.1 and 0.2 are within 0.005 MDIR, 0.490 vs 0.495; δ 0.2 has the lower honest false exclusion, 8% vs 11%).
+
+**Decision (2026-10-14), as pre-registered:** "If no δ qualifies, the harm defense is reported as a negative result and Paper A takes the threat/metric/benchmark framing." **Pass criterion 3 cannot be met. Paper A goes ahead as threat + metric + benchmark (criteria 1, 2 and 4)**, with these defense findings as results: (a) no tested defense undoes coordinated hiding (best MDIR about 0.50 vs 0.45 clean, FLTrust); (b) leave-one-out scores are masked by coordinated attackers; (c) harm-aware gating trades false alarms for blindness to non-harm attacks; (d) CAGA's candidate claims from the attacker-count study (graceful degradation, detection of few attackers). Criterion 4 (adaptive attacker) is re-scoped: there is no successful harm defense to attack, so step 8 tests the adaptive hider against harm reputation δ 0.2 and CAGA as a robustness *characterisation*, not a pass/fail.
+
+**Frozen for step 7 (fresh seeds 12–16):** methods FedAvg, norm clip ×1.0, FLTrust (root 20k), LFR, Zeno (c = true count, plus `_c2` variants where the count differs from 2), coordinate median, Krum, CAGA (warm-up 5, whole-client gating, `tol_z` 2, final check "z"), harm reputation δ 0.2 (negative-result row). Learning rate 0.003, 2 local epochs, 40 rounds, attack onset round 12, root fraction 0.12, probe 4,000.
+
 ### Pass criteria for Paper A (fixed 2026-10-14, before any results)
 
 1. **Premise:** under `hideHigh`, FedAvg's MDIR rises by ≥ 0.05 with an AUROC change < 0.01 (step 3 sanity check). If this fails, the attack is strengthened before anything else.
