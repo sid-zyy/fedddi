@@ -1,0 +1,111 @@
+# Risk classes for DrugBank interaction descriptions (Paper A, step 1).
+#
+# Each pair's description is turned into a template by replacing both drugs' names with "#DRUG"
+# (src/data/ddi_risk.py). Rules are tried in order and the first match wins:
+#   template: exact match on the whole template      pattern: case-insensitive regex search
+# Anything unmatched is type "other", risk "low".
+#
+# Risk classes (fixed in PUBLICATION_PLAN.md, Paper A, "Metric definitions"):
+#   high      CNS depression, QTc prolongation, bleeding, serotonin syndrome, hyperkalemia, nephrotoxicity,
+#             hepatotoxicity, cardiotoxicity, arrhythmia, respiratory depression, seizures, rhabdomyolysis,
+#             hypoglycemia, hypotension, methemoglobinemia, tachycardia (increased risk or activity only)
+#   moderate  serum level, metabolism, excretion or absorption changes; efficacy changes
+#   low       everything else, including generic "adverse effects", hypertension and reduced risks
+# Judgement calls, recorded in the plan: increased anticoagulant/antiplatelet activity counts as bleeding;
+# bradycardia, heart block and AV block as arrhythmia; renal failure as nephrotoxicity; "serotonergic
+# activities" as serotonin syndrome; plain sedation (without "CNS depression") stays low.
+#
+# The first 60 rules are the 60 most frequent templates (counts in the trailing comment, DrugBank 5.1,
+# approved small molecules), listed explicitly so the appendix table is exact. Templates that still
+# contain a drug synonym (e.g. "Salbutamol" for albuterol) are left to the keyword fallbacks.
+rules:
+  # ---- Top 60 templates, explicit. ----
+  - {template: '#DRUG may decrease the excretion rate of #DRUG which could result in a higher serum level.', type: pk_change, risk: moderate}  # 124620
+  - {template: 'The metabolism of #DRUG can be decreased when combined with #DRUG.', type: pk_change, risk: moderate}  # 107440
+  - {template: 'The risk or severity of CNS depression can be increased when #DRUG is combined with #DRUG.', type: cns_depression, risk: high}  # 44994
+  - {template: 'The serum concentration of #DRUG can be increased when it is combined with #DRUG.', type: pk_change, risk: moderate}  # 44501
+  - {template: 'The risk or severity of adverse effects can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 42459
+  - {template: 'The therapeutic efficacy of #DRUG can be decreased when used in combination with #DRUG.', type: efficacy_change, risk: moderate}  # 38315
+  - {template: 'The risk or severity of QTc prolongation can be increased when #DRUG is combined with #DRUG.', type: qtc_prolongation, risk: high}  # 30626
+  - {template: 'The metabolism of #DRUG can be increased when combined with #DRUG.', type: pk_change, risk: moderate}  # 28349
+  - {template: 'The risk or severity of hypertension can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 16375
+  - {template: '#DRUG may decrease the antihypertensive activities of #DRUG.', type: efficacy_change, risk: moderate}  # 16116
+  - {template: 'The risk or severity of methemoglobinemia can be increased when #DRUG is combined with #DRUG.', type: methemoglobinemia, risk: high}  # 14537
+  - {template: 'The serum concentration of #DRUG can be decreased when it is combined with #DRUG.', type: pk_change, risk: moderate}  # 14033
+  - {template: '#DRUG may increase the excretion rate of #DRUG which could result in a lower serum level and potentially a reduction in efficacy.', type: pk_change, risk: moderate}  # 11803
+  - {template: '#DRUG may increase the hypotensive activities of #DRUG.', type: hypotension, risk: high}  # 10644
+  - {template: 'The therapeutic efficacy of #DRUG can be increased when used in combination with #DRUG.', type: efficacy_change, risk: moderate}  # 8156
+  - {template: '#DRUG may increase the central nervous system depressant (CNS depressant) activities of #DRUG.', type: cns_depression, risk: high}  # 8044
+  - {template: 'The excretion of #DRUG can be decreased when combined with #DRUG.', type: pk_change, risk: moderate}  # 7717
+  - {template: 'The risk or severity of nephrotoxicity can be increased when #DRUG is combined with #DRUG.', type: nephrotoxicity, risk: high}  # 5481
+  - {template: 'The risk or severity of bleeding can be increased when #DRUG is combined with #DRUG.', type: bleeding, risk: high}  # 5382
+  - {template: '#DRUG can cause a decrease in the absorption of #DRUG resulting in a reduced serum concentration and potentially a decrease in efficacy.', type: pk_change, risk: moderate}  # 5265
+  - {template: 'The risk or severity of Tachycardia can be increased when #DRUG is combined with #DRUG.', type: tachycardia, risk: high}  # 4862
+  - {template: 'The risk or severity of hyperkalemia can be increased when #DRUG is combined with #DRUG.', type: hyperkalemia, risk: high}  # 4408
+  - {template: '#DRUG may increase the arrhythmogenic activities of #DRUG.', type: arrhythmia, risk: high}  # 3464
+  - {template: 'The risk or severity of serotonin syndrome can be increased when #DRUG is combined with #DRUG.', type: serotonin_syndrome, risk: high}  # 3460
+  - {template: '#DRUG may increase the hyperkalemic activities of #DRUG.', type: hyperkalemia, risk: high}  # 2880
+  - {template: 'The risk or severity of gastrointestinal irritation can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 2826
+  - {template: 'The risk or severity of hypoglycemia can be increased when #DRUG is combined with #DRUG.', type: hypoglycemia, risk: high}  # 2657
+  - {template: 'The risk or severity of bleeding and hemorrhage can be increased when #DRUG is combined with #DRUG.', type: bleeding, risk: high}  # 2565
+  - {template: 'The risk or severity of hyperglycemia can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 2500
+  - {template: 'The risk or severity of myopathy, rhabdomyolysis, and myoglobinuria can be increased when #DRUG is combined with #DRUG.', type: rhabdomyolysis, risk: high}  # 2455
+  - {template: 'The risk or severity of gastrointestinal bleeding can be increased when #DRUG is combined with #DRUG.', type: bleeding, risk: high}  # 2334
+  - {template: 'The risk or severity of hypotension can be increased when #DRUG is combined with #DRUG.', type: hypotension, risk: high}  # 2114
+  - {template: '#DRUG may increase the hypoglycemic activities of #DRUG.', type: hypoglycemia, risk: high}  # 1984
+  - {template: '#DRUG may increase the bradycardic activities of #DRUG.', type: arrhythmia, risk: high}  # 1957
+  - {template: 'The risk or severity of hypokalemia can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 1795
+  - {template: 'The risk or severity of dehydration can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 1713
+  - {template: 'The risk or severity of renal failure, hyperkalemia, and hypertension can be increased when #DRUG is combined with #DRUG.', type: hyperkalemia, risk: high}  # 1703
+  - {template: '#DRUG may increase the neurotoxic activities of #DRUG.', type: other, risk: low}  # 1541
+  - {template: '#DRUG may increase the sedative activities of #DRUG.', type: other, risk: low}  # 1452
+  - {template: '#DRUG may increase the orthostatic hypotensive activities of #DRUG.', type: hypotension, risk: high}  # 1442
+  - {template: '#DRUG may increase the neuromuscular blocking activities of #DRUG.', type: other, risk: low}  # 1273
+  - {template: '#DRUG may increase the anticoagulant activities of #DRUG.', type: bleeding, risk: high}  # 1217
+  - {template: '#DRUG may increase the neuroexcitatory activities of #DRUG.', type: other, risk: low}  # 1126
+  - {template: '#DRUG may decrease the sedative activities of #DRUG.', type: efficacy_change, risk: moderate}  # 1097
+  - {template: '#DRUG may increase the immunosuppressive activities of #DRUG.', type: other, risk: low}  # 972
+  - {template: '#DRUG may increase the hypertensive activities of #DRUG.', type: other, risk: low}  # 939
+  - {template: '#DRUG may increase the QTc-prolonging activities of #DRUG.', type: qtc_prolongation, risk: high}  # 880
+  - {template: 'The risk or severity of sedation can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 876
+  - {template: '#DRUG may increase the serotonergic activities of #DRUG.', type: serotonin_syndrome, risk: high}  # 875
+  - {template: 'The risk or severity of tendinopathy can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 837
+  - {template: '#DRUG may increase the hypertensive and vasoconstricting activities of #DRUG.', type: other, risk: low}  # 807
+  - {template: 'The risk or severity of neuromuscular blockade can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 738
+  - {template: '#DRUG may increase the orthostatic hypotensive, hypotensive, and antihypertensive activities of #DRUG.', type: hypotension, risk: high}  # 726
+  - {template: 'The protein binding of #DRUG can be decreased when combined with #DRUG.', type: pk_change, risk: moderate}  # 686
+  - {template: '#DRUG may increase the antihypertensive activities of #DRUG.', type: efficacy_change, risk: moderate}  # 663
+  - {template: '#DRUG may increase the anticholinergic activities of #DRUG.', type: other, risk: low}  # 648
+  - {template: 'The risk or severity of sedation, somnolence, and CNS depression can be increased when #DRUG is combined with #DRUG.', type: cns_depression, risk: high}  # 646
+  - {template: 'The risk or severity of neutropenia and thrombocytopenia can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 637
+  - {template: '#DRUG may decrease the hypoglycemic activities of #DRUG.', type: efficacy_change, risk: moderate}  # 629
+  - {template: 'The risk or severity of electrolyte imbalance can be increased when #DRUG is combined with #DRUG.', type: other, risk: low}  # 610
+  # ---- Keyword fallbacks (first match wins). Order matters: reductions before harms, harms before PK. ----
+  # Reduced risk of an adverse effect.
+  - {pattern: '^The risk or severity of .* can be decreased when', type: risk_decrease, risk: low}
+  # Reduced toxic activity.
+  - {pattern: 'may decrease the (nephrotoxic|cardiotoxic|arrhythmogenic) activities', type: risk_decrease, risk: low}
+  # Reduced therapeutic or pharmacodynamic activity: an efficacy change.
+  - {pattern: 'may decrease (the .* activities|effectiveness)', type: efficacy_change, risk: moderate}
+  # High risk (the classes fixed in PUBLICATION_PLAN.md, Paper A, "Metric definitions").
+  - {pattern: 'respiratory depression', type: respiratory_depression, risk: high}
+  - {pattern: 'CNS depress|central nervous system depressant', type: cns_depression, risk: high}
+  - {pattern: 'QTc|torsade', type: qtc_prolongation, risk: high}
+  - {pattern: 'serotonin syndrome|serotonergic', type: serotonin_syndrome, risk: high}
+  - {pattern: 'bleeding|hemorrhag|anticoagulant|antiplatelet', type: bleeding, risk: high}
+  - {pattern: 'methemoglobinemia', type: methemoglobinemia, risk: high}
+  - {pattern: 'hyperkalemi', type: hyperkalemia, risk: high}
+  - {pattern: 'nephrotox|renal failure', type: nephrotoxicity, risk: high}
+  - {pattern: 'hepatotox|liver damage|liver enzyme', type: hepatotoxicity, risk: high}
+  - {pattern: 'cardiotox|cardiodepressant|myocardial depression|heart failure|cardiac arrest', type: cardiotoxicity, risk: high}
+  - {pattern: 'tachycard', type: tachycardia, risk: high}
+  - {pattern: 'arrhythm|bradycard|heart block|AV block|sinus node', type: arrhythmia, risk: high}
+  - {pattern: 'seizure|convulsion', type: seizure, risk: high}
+  - {pattern: 'rhabdomyolysis', type: rhabdomyolysis, risk: high}
+  - {pattern: 'hypoglycemi', type: hypoglycemia, risk: high}
+  - {pattern: 'hypotensi', type: hypotension, risk: high}
+  - {pattern: '\bdeath\b', type: death, risk: high}
+  # Moderate: pharmacokinetic and efficacy changes.
+  - {pattern: 'serum concentration|serum level|metabolism of|excretion|absorption|bioavailability|protein binding', type: pk_change, risk: moderate}
+  - {pattern: 'therapeutic efficacy|effectiveness of|antihypertensive activities', type: efficacy_change, risk: moderate}
+  # Everything else (generic adverse effects, hypertension, GI irritation, sedation, ...) falls through to low.

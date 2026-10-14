@@ -47,6 +47,7 @@ def load_drugbank(root: str = "./data/drugbank", split: str = "random"
 
     The message-passing graph is the split's training edges only, so validation and test
     interactions (and, in the cold split, the held-out drugs' interactions) never leak into it.
+    Files built with risk labels also give ``split[part]["risk"]`` (0 low, 1 moderate, 2 high) per positive.
     """
     path = os.path.join(root, "drugbank_ddi.pt")
     if not os.path.exists(path):
@@ -60,3 +61,13 @@ def load_drugbank(root: str = "./data/drugbank", split: str = "random"
     edge_index = to_undirected(edge_split["train"]["edge"].t().contiguous(), num_nodes=n)
     data = Data(edge_index=edge_index, num_nodes=n)
     return data, DDIEvaluator(), edge_split, blob["features"].float(), blob["atc_mapping"].long()
+
+
+def edge_risk_lookup(root: str = "./data/drugbank") -> Dict[Tuple[int, int], int]:
+    """Risk class (0 low, 1 moderate, 2 high) of every interacting pair, keyed by ``(min(u, v), max(u, v))``."""
+    blob: Dict[str, Any] = torch.load(os.path.join(root, "drugbank_ddi.pt"), weights_only=False)
+    if "edge_risk" not in blob:
+        raise KeyError("no risk labels: run scripts/prepare_drugbank.py --risk-only --out " + root)
+    e = blob["edges"].long()
+    lo, hi = torch.minimum(e[:, 0], e[:, 1]).tolist(), torch.maximum(e[:, 0], e[:, 1]).tolist()
+    return dict(zip(zip(lo, hi), blob["edge_risk"].long().tolist()))

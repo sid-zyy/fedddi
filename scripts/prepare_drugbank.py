@@ -6,10 +6,16 @@ is excluded from Git. Streams the XML once and keeps small-molecule drugs that h
 Writes to --out:
   drugs.csv              drugbank_id, name, groups, atc_level1, smiles, degree
   interactions.csv.gz    one row per unordered pair: a, b (node indices), description
-  drugbank_ddi.pt        features (Morgan fingerprints), atc_mapping, edges, random and cold-drug splits
+  drugbank_ddi.pt        features (Morgan fingerprints), atc_mapping, edges, random and cold-drug splits,
+                         edge_type / edge_risk per pair and a "risk" tensor for every split's positives
+  templates.csv          template, count, type, risk (the risk mapping, for the paper's appendix)
+
+Risk classes come from conf/ddi_risk_map.yaml (src/data/ddi_risk.py). --risk-only relabels an existing
+build from its drugs.csv and interactions.csv.gz without re-parsing the XML, keeping the splits unchanged.
 
 Example:
     python scripts/prepare_drugbank.py --xml "path/to/full database.xml" --out data/drugbank
+    python scripts/prepare_drugbank.py --risk-only --out data/drugbank
 """
 from __future__ import annotations
 
@@ -17,10 +23,15 @@ import argparse
 import csv
 import gzip
 import os
-from typing import Dict, List, Set, Tuple
+import sys
+from collections import Counter
+from typing import Dict, List, Sequence, Set, Tuple
 
 import numpy as np
 import torch
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from src.data.ddi_risk import DEFAULT_MAP, RISK_NAMES, RiskMap, make_template  # noqa: E402
 
 NS = "{http://www.drugbank.ca}"
 # Same class order as scripts/prepare_atc_mapping.py; index 14 = unknown.
@@ -29,7 +40,10 @@ ATC_CODES = ["A", "B", "C", "D", "G", "H", "J", "L", "M", "N", "P", "R", "S", "V
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--xml", required=True)
+    p.add_argument("--xml", help="DrugBank XML export (not needed with --risk-only).")
+    p.add_argument("--risk-only", action="store_true",
+                   help="Only (re)compute risk labels for the existing build in --out.")
+    p.add_argument("--risk-map", default=DEFAULT_MAP)
     p.add_argument("--out", default="data/drugbank")
     p.add_argument("--fp-bits", type=int, default=1024)
     p.add_argument("--fp-radius", type=int, default=2)
@@ -113,9 +127,74 @@ def sample_negatives(n: int, pos: Set[Tuple[int, int]], count: int, rng: np.rand
     return np.array(sorted(out), dtype=np.int64)
 
 
+def pair_keys(edges: np.ndarray, n: int) -> np.ndarray:
+    lo, hi = np.minimum(edges[:, 0], edges[:, 1]), np.maximum(edges[:, 0], edges[:, 1])
+    return lo.astype(np.int64) * n + hi
+
+
+def label_risk(blob: dict, rows: Sequence[Tuple[int, int, str]], names: Sequence[str], risk_map: RiskMap,
+               out_dir: str) -> None:
+    """Add edge_type, edge_risk and per-split positive risk to `blob`; write templates.csv."""
+    edges = blob["edges"].numpy()
+    if len(rows) != len(edges) or any((min(x, y), max(x, y)) != (int(e[0]), int(e[1]))
+                                      for (x, y, _), e in zip(rows, edges)):
+        raise ValueError("interaction rows are not aligned with the saved edges; rebuild from the XML")
+    templates = [make_template(desc, (names[x], names[y])) for x, y, desc in rows]
+    labels = [risk_map.classify(t) for t in templates]
+    edge_type = np.array([risk_map.type_id(t) for t, _ in labels], dtype=np.int64)
+    edge_risk = np.array([r for _, r in labels], dtype=np.int64)
+    n = int(blob["num_nodes"])
+    keys = pair_keys(edges, n)
+    order = np.argsort(keys)
+    for split in blob["splits"].values():
+        for part in ("train", "valid", "test"):
+            q = pair_keys(split[part]["edge"].numpy(), n)
+            idx = order[np.searchsorted(keys, q, sorter=order)]
+            if not np.array_equal(keys[idx], q):
+                raise ValueError("a split edge is missing from the edge list")
+            split[part]["risk"] = torch.from_numpy(edge_risk[idx])
+    blob["edge_type"], blob["edge_risk"] = torch.from_numpy(edge_type), torch.from_numpy(edge_risk)
+    blob["meta"] = {**blob.get("meta", {}), "edge_types": risk_map.types, "risk_names": list(RISK_NAMES),
+                    "risk_map": os.path.basename(risk_map.path)}
+    counts = Counter(templates)
+    with open(os.path.join(out_dir, "templates.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["template", "count", "type", "risk"])
+        for t, c in counts.most_common():
+            typ, r = risk_map.classify(t)
+            w.writerow([t, c, typ, RISK_NAMES[r]])
+    print("risk classes:", {RISK_NAMES[r]: f"{int((edge_risk == r).sum())} ({(edge_risk == r).mean():.1%})"
+                            for r in range(len(RISK_NAMES))})
+    by_type = Counter(risk_map.types[i] for i in edge_type.tolist())
+    print("types:", dict(by_type.most_common()))
+    for name, split in blob["splits"].items():
+        print(f"{name} split high-risk share:",
+              {p: f"{float((split[p]['risk'] == 2).float().mean()):.3f}" for p in ("train", "valid", "test")})
+
+
+def relabel_existing(out_dir: str, risk_map: RiskMap) -> None:
+    import pandas as pd
+
+    path = os.path.join(out_dir, "drugbank_ddi.pt")
+    blob = torch.load(path, weights_only=False)
+    names = pd.read_csv(os.path.join(out_dir, "drugs.csv"))["name"].fillna("").astype(str).tolist()
+    it = pd.read_csv(os.path.join(out_dir, "interactions.csv.gz"))
+    rows = list(zip(it["a"].astype(int).tolist(), it["b"].astype(int).tolist(),
+                    it["description"].fillna("").astype(str).tolist()))
+    label_risk(blob, rows, names, risk_map, out_dir)
+    torch.save(blob, path)
+    print("Relabelled", path)
+
+
 def main() -> None:
     a = parse_args()
     os.makedirs(a.out, exist_ok=True)
+    risk_map = RiskMap.load(a.risk_map)
+    if a.risk_only:
+        relabel_existing(a.out, risk_map)
+        return
+    if not a.xml:
+        raise SystemExit("--xml is required unless --risk-only is given")
     print("Parsing", a.xml, flush=True)
     drugs, pairs = parse_xml(a.xml)
     print(f"{len(drugs)} drug records, {len(pairs)} unordered interaction pairs", flush=True)
@@ -172,12 +251,13 @@ def main() -> None:
     to_t = lambda s: {k: ({kk: torch.from_numpy(vv) for kk, vv in v.items()} if isinstance(v, dict) else v)
                       for k, v in s.items()}
 
-    torch.save({"num_nodes": n, "features": torch.from_numpy(feats.astype(np.float32)),
-                "atc_mapping": torch.from_numpy(atc), "edges": torch.from_numpy(edges),
-                "splits": {"random": to_t(rand), "cold": to_t(cold)},
-                "meta": {"source": os.path.basename(a.xml), "fp_bits": a.fp_bits, "fp_radius": a.fp_radius,
-                         "approved_only": a.approved_only, "seed": a.seed}},
-               os.path.join(a.out, "drugbank_ddi.pt"))
+    blob = {"num_nodes": n, "features": torch.from_numpy(feats.astype(np.float32)),
+            "atc_mapping": torch.from_numpy(atc), "edges": torch.from_numpy(edges),
+            "splits": {"random": to_t(rand), "cold": to_t(cold)},
+            "meta": {"source": os.path.basename(a.xml), "fp_bits": a.fp_bits, "fp_radius": a.fp_radius,
+                     "approved_only": a.approved_only, "seed": a.seed}}
+    label_risk(blob, rows, [d["name"] for d in keep], risk_map, a.out)
+    torch.save(blob, os.path.join(a.out, "drugbank_ddi.pt"))
     with open(os.path.join(a.out, "drugs.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["index", "drugbank_id", "name", "groups", "atc_level1", "smiles", "degree"])

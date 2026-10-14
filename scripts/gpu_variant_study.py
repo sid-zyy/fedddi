@@ -1,8 +1,9 @@
 """Run the CAGA-variant study (pilot protocol) several runs at a time, on GPU or CPU.
 
-Methods: FedAvg, norm clipping, FLTrust, and CAGA with and without the class-aware probe and
-reputation. Attacks: moderate poisoning, four unboosted poisoners ("test A"), and A Little Is Enough
-("test B"), each with severe drift. A run whose rounds.csv already has every round is skipped, so an
+Methods: FedAvg, norm clipping, FLTrust, CAGA with and without the class-aware probe and reputation,
+and the robust baselines LFR, ERR, Zeno, Krum, coordinate median and trimmed mean. Attacks: moderate
+poisoning, four unboosted poisoners ("test A"), A Little Is Enough ("test B"), and the safety-critical
+attacks of Paper A (hiding or fabricating high-risk interactions, DrugBank only), each with severe drift. A run whose rounds.csv already has every round is skipped, so an
 interrupted session can be restarted with the same command.
 
 Example (Kaggle, DrugBank, tuning seeds):
@@ -29,6 +30,13 @@ METHODS = {
     "caga_rep": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-reputation"],
     "caga_rep3": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-reputation", "--caga-rep-threshold", "3"],
     "caga_class_rep": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-class-aware", "--caga-reputation"],
+    # Paper A baselines (step 4); LFR, ERR and Zeno use CAGA's clean probe.
+    "lfr": ["--method", "lfr"],
+    "err": ["--method", "err"],
+    "zeno": ["--method", "zeno"],
+    "krum": ["--method", "krum"],
+    "median": ["--method", "median"],
+    "trimmed": ["--method", "trimmed"],
 }
 ATTACKS = {
     "moderate": ["--cond", "joint"],
@@ -39,6 +47,13 @@ ATTACKS = {
     # Stress tests of A Little Is Enough: fewer attackers, and a larger shift than the paper's z.
     "testB2": ["--cond", "drift", "--lie-clients", "0", "1"],
     "testBz2": ["--cond", "drift", "--lie-clients", "0", "1", "4", "5", "--lie-z", "2.0"],
+    # Drift only: the control that isolates the safety-critical attacks from the severe drift they run with.
+    "drift": ["--cond", "drift"],
+    # Paper A, step 3 (DrugBank): clients 0 and 1 hide 80% of their high-risk interactions, normal-size updates.
+    "hideHigh": ["--cond", "joint", "--hide-high", "0.8", "--no-boost"],
+    "hideHigh4": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5"],
+    "fabHigh": ["--cond", "joint", "--fabricate-high", "0.3", "--no-boost"],
+    "hideHighLIE": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--lie-clients", "4", "5"],
 }
 
 
@@ -54,6 +69,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--parallel", type=int, default=3)
     p.add_argument("--threads", type=int, default=1)
     p.add_argument("--out", default=os.path.join(ROOT, "results", "gpu_variants"))
+    p.add_argument("--log-cch", action="store_true", help="Pass --log-cch to every run.")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -77,7 +93,7 @@ def main() -> None:
                 cmd = [sys.executable, os.path.join(ROOT, "scripts", "cpu_pilot.py"), "--dataset", a.dataset,
                        "--split", a.split, "--seed", str(seed), "--rounds", str(a.rounds), "--attack-start", "12",
                        "--lr", "0.003", "--local-epochs", "2", "--device", a.device, "--threads", str(a.threads),
-                       "--tag", tag, "--out", a.out] + ATTACKS[atk] + METHODS[m]
+                       "--tag", tag, "--out", a.out] + ATTACKS[atk] + METHODS[m] + (["--log-cch"] if a.log_cch else [])
                 jobs.append((f"seed{seed}_{tag}", cmd))
     if a.dataset == "ogbl-ddi" and not a.dry_run:
         # Fixed features are cached per seed; build them once before parallel runs could race on the cache.
