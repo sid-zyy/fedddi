@@ -2,6 +2,8 @@
 
 The plan for turning FedDDI-CAGA into a journal paper. Tick items off as they are done, and record decisions here so co-authors share one picture.
 
+**Start here:** the active plan is **"Paper A: safety-critical poisoning and harm-gated aggregation"** below, which lists the environment, file locations and the exact steps. The earlier sections are the evidence it builds on.
+
 Last updated: 2026-10-14.
 
 ## Current verdict and outlook (2026-10-14)
@@ -47,6 +49,167 @@ Estimate: better-than-even odds that the confirmation passes on at least one dat
 - [ ] DrugBank cold-drug split.
 
 **Decision points:** confirmation passes on both datasets → method paper. On one → narrower method paper. On neither → empirical study.
+
+## Paper A: safety-critical poisoning and harm-gated aggregation (decided 2026-10-14)
+
+**This is the active plan.** It supersedes the "CAGA vs crafted attacks" method paper as the headline, and keeps everything done so far as supporting evidence. Read this section first in a new session.
+
+### Why this paper
+
+Working title: **"Hiding dangerous drug interactions: safety-critical poisoning in federated drug–drug interaction prediction, and harm-gated aggregation."**
+
+The problem: a malicious hospital in a drug-safety federation poisons the shared model so it stops flagging *dangerous* interactions (bleeding, QTc prolongation, serotonin syndrome, CNS depression). Overall accuracy barely moves, so accuracy-based and similarity-based defenses miss it. Test A already showed this effect: overall Hits@20 unchanged while targeted edges were damaged.
+
+Contributions, each able to stand alone:
+
+1. **Threat model:** selective hiding (and fabrication) of high-risk interactions in federated DDI prediction. The literature search (2026-10-14) found no poisoning defense for federated DDI prediction and no work on attacks that hide dangerous interactions.
+2. **Metric:** Counterfactual Clinical Harm (CCH), a client-level, effect-based trust score in clinical units, plus the model-level Missed Dangerous Interaction Rate (MDIR) and Damage Recovery Ratio (DRR).
+3. **Defense:** harm-gated CAGA, which gates updates by CCH against a risk-weighted, secretly re-drawn clean anchor.
+4. **Benchmark:** two datasets, a full attack table, and nine defenses including the closest prior work (Fang et al.'s LFR/ERR, Zeno++, FLTrust).
+
+Why this is the best chance (assessed 2026-10-14): it degrades gracefully. If the defense only ties LFR or FLTrust, contributions 1, 2 and 4 still carry a Q1 biomedical-informatics paper. A paper on "CAGA beats crafted attacks" alone depends on one result and collides with LFR/Zeno. Estimated Q1 acceptance: A about 50–60%, crafted-attack paper about 30–40%, empirical study about 25–35% (subjective). Target venues: IEEE JBHI, Briefings in Bioinformatics, Journal of Biomedical Informatics. A clinical or pharmacology co-author to check the risk mapping would strengthen it more than any single experiment.
+
+### Prior work to cite and position against (from the 2026-10-14 search)
+
+- Validation-based defenses: [Fang et al., LFR/ERR, USENIX Security 2020](https://arxiv.org/pdf/1911.11815); [Zeno++, ICML 2020](https://proceedings.mlr.press/v119/xie20c.html); [FLTrust, NDSS 2021](https://arxiv.org/pdf/2012.13995); [FedVal, USENIX Security 2023](https://arxiv.org/pdf/2306.04040); [FLShield](https://arxiv.org/pdf/2308.05832); [SLVR](https://arxiv.org/pdf/2502.08055). All score updates on overall loss or similarity; none uses a severity-stratified objective or counts harm in clinical units.
+- Attacks: [A Little Is Enough](https://arxiv.org/pdf/1902.06156); min-max/min-sum (Shejwalkar & Houmansadr, NDSS 2021); inner-product manipulation (Xie et al., 2020); model replacement (Bagdasaryan et al., 2020).
+- Graphs and link prediction: [federated KG-embedding poisoning, Zhou et al., WWW 2024](https://github.com/jisooma/FKGEPoison) (attack, no real defense); [Link-Backdoor](https://arxiv.org/pdf/2208.06776); [poisoning-based link inference in federated GNNs, PoPETs 2026](https://www.petsymposium.org/popets/2026/popets-2026-0042.php).
+- Metrics: trust and reputation scores ([FLARE](https://arxiv.org/pdf/2511.14715), [FederatedTrust](https://arxiv.org/pdf/2302.09844)) measure similarity or consistency, not effect. [MPIB's Clinical Harm Event Rate](https://arxiv.org/html/2602.06268v1) is for medical LLM prompts; its finding that attack success and clinical harm diverge supports CCH.
+- Certified robustness, for related work only: [FLCert](https://ar5iv.arxiv.org/html/2210.00584).
+- Federated drug work: [federated drug–target interaction benchmark](https://arxiv.org/pdf/2302.07684); [DDI ML review](https://www.sciencedirect.com/science/article/pii/S2452310025000113).
+
+### Attack scope
+
+| Family | Attack | Status | Notes |
+| --- | --- | --- | --- |
+| Data | Interaction suppression / fabrication | done (moderate, strong, test A) | |
+| Data | **High-risk hiding** (new, step 3) | to do | headline attack |
+| Data | High-risk fabrication (false alarms) | to do (step 3) | secondary |
+| Data | Feature drift | done (severe drift) | |
+| Model | Boosting / model replacement | done (strong) | |
+| Model | A Little Is Enough | done (test B) | CAGA's existing win |
+| Model | Sign flip, Gaussian noise | to do (step 7) | sanity rows |
+| Model | Min-max / min-sum, inner-product manipulation | to do (step 7) | |
+| Model | **Adaptive attacker vs harm gate** | to do (step 8) | mandatory for reviewers |
+| System | Malicious majority (6 of 10 clients) | to do (step 8) | |
+| System | On-off / sleeper attacker | to do (step 8) | |
+| Out of scope | Edge-trigger backdoors; privacy attacks | limitation | say so in the paper |
+
+### Metric definitions (fix before running)
+
+- **Risk classes:** each DrugBank interaction is mapped from its description template to a type (396 templates; the top 20 cover 87% of pairs) and then to a risk class: `high` (CNS depression, QTc prolongation, bleeding, serotonin syndrome, hyperkalemia, nephrotoxicity, hepatotoxicity, cardiotoxicity, arrhythmia, respiratory depression, seizures, rhabdomyolysis, hypoglycemia, hypotension, methemoglobinemia, tachycardia), `moderate` (serum level, metabolism or excretion changes, efficacy changes), `low` (everything else). The mapping lives in a version-controlled file and is reported in full in the paper. About 20% of pairs are high-risk.
+- **Decision threshold** t: chosen once per run on the *clean validation* negatives so that 95% of non-interacting pairs score below it (95% specificity). A pair is "flagged" if its probability is ≥ t.
+- **MDIR** (model level, lower is better): the fraction of true high-risk test interactions that are not flagged. Also report it per risk class, and the risk-weighted recall Σ_r w_r · recall_r / Σ_r w_r with weights high 3, moderate 2, low 1.
+- **CCH_i** (client level, per round, lower is better): on the clean anchor's high-risk positive pairs P_h, let A = the aggregate including client i and A₋ᵢ = the aggregate without it. Then CCH_i = |{p ∈ P_h : flagged under A₋ᵢ, not flagged under A}| + λ · |{n ∈ N_h : not flagged under A₋ᵢ, flagged under A}|, where N_h are sampled non-interacting pairs and λ = 0.5. The unit is "high-risk interactions hidden (plus half of false alarms raised)". Report it per round, and its time mean per client.
+- **DRR** (defense level): (score of defense under attack − FedAvg under attack) / (FedAvg clean − FedAvg under attack), for AUROC and for 1 − MDIR. Only reported when the attack costs FedAvg at least 0.005 AUROC or 0.02 MDIR, otherwise it is undefined.
+- Always reported alongside: honest-client false-exclusion rate (honest client-rounds not fully accepted) and no-attack cost (defense minus FedAvg, clean).
+
+### Environment and where things are (needed after clearing context)
+
+- Repository: this folder, a git repo with remote `https://github.com/sid-zyy/fedddi` (private). **Several local commits are unpushed; ask the user before pushing.** Never add Claude as author or co-author.
+- **DrugBank (licensed, never commit or share):** XML at `C:\Users\Kenzyy\Downloads\drugbank_all_full_database.xml\full database.xml` (5.1, exported 2026-03-05). Processed output in the git-ignored `data/drugbank/`: `drugbank_ddi.pt` (approved small molecules: 2,277 drugs, 674,213 pairs, Morgan fingerprints of 1024 bits, ATC classes, random and cold-drug splits), `drugs.csv`, and `interactions.csv.gz` (pairs with description text). Rebuild: `python scripts/prepare_drugbank.py --xml "<xml path>" --out data/drugbank --approved-only`.
+- ogbl-ddi is in `data/` (downloaded by `load_dataset`), with the ATC mapping in `data/ogbl_ddi/atc_mapping.pt`, and fixed-feature caches for seeds 0–4, 10 and 11.
+- Python environment: the earlier venv lived in a temporary scratch folder and may be gone. Recreate one with `python -m venv .venv`, then `pip install torch --index-url https://download.pytorch.org/whl/cpu`, then `pip install torch-geometric ogb omegaconf hydra-core scipy flwr wandb scikit-learn networkx tqdm rdkit lxml pandas pytest pyyaml`. `.venv/` is git-ignored.
+- Tests: run each file separately (legacy test doubles break shared processes): `for t in tests/test_*.py; do python -m pytest "$t" -q -p no:cacheprovider | tail -1; done`. All 180+ pass as of 2026-10-14.
+- Pilot runner: `scripts/cpu_pilot.py` (one federated run; `--dataset {ogbl-ddi,drugbank} --split {random,cold} --method {fedavg,fedavg_root,normclip,fltrust,caga,caga_noblock} --cond {clean,poison,drift,joint} --device {cpu,cuda}`; attack options `--poison-strength`, `--extra-poisoned`, `--no-boost`, `--lie-clients`, `--lie-z`; CAGA options `--caga-warmup`, `--caga-tol-z`, `--caga-class-aware`, `--caga-reputation`). It writes `rounds.csv` with per-round metrics, per-client losses and CAGA verdicts.
+- Study runner: `scripts/gpu_variant_study.py` (parallel, resumable, `--methods`, `--attacks`, `--seeds`); summary: `scripts/summarize_variants.py <folder>`.
+- Kaggle: `python scripts/make_kaggle_bundle.py` writes `results/kaggle/fedddi_code.zip` and the notebooks. The user updates the Kaggle dataset `fedddi-phase-3` with the zip, and attaches the **private** DrugBank dataset holding `drugbank_ddi.pt`. A T4 runs about 3 pilot runs in parallel, about 7 minutes each on DrugBank. Notebooks: use `!` cells for long runs (live output); `%%bash` cells only print when they finish.
+- Laptop: CPU runs pause when it sleeps and die if the battery runs out; remind the user to keep it plugged in.
+- Status replies: when the user asks "status", answer only with runs done, health, and ETA.
+
+### Pending from before this decision
+
+- [ ] Kaggle `fedddi_confirm_drugbank.ipynb` (84 runs, seeds 5–7) and `fedddi_confirm_ogbl.ipynb` (60 runs) for the crafted-attack claim. Its first attempt failed because the DrugBank dataset was not attached. Their results become the "general attacks" section of Paper A; evaluate them against the criteria in Phase 2.
+- [ ] Kaggle `fedddi_lrdecay.ipynb` and `fedddi_centralized.ipynb` (methods section: learning-rate decay and centralized ceilings).
+
+### Exact steps
+
+**Step 1: risk labels (about 1 day).**
+1. Add `conf/ddi_risk_map.yaml`: an ordered list of `{pattern, type, risk}` rules matched against the template (description with both drug names replaced by `#DRUG`). Cover the top 60 templates explicitly, then keyword fallbacks; everything unmatched is `low`.
+2. In `scripts/prepare_drugbank.py`: build the template per pair (the code exists in the 2026-10-14 analysis: replace each drug's name with `#DRUG`), map it to `type_id` and `risk` (0 low, 1 moderate, 2 high), and save `edge_type` and `edge_risk` aligned with `edges`, plus a `risk` tensor for every split's positive edges (`splits[s][part]["risk"]`). Write `data/drugbank/templates.csv` (template, count, type, risk) for the paper's appendix.
+3. In `src/data/drugbank.py`, return the per-split risk tensors (keep the current return signature backward compatible, e.g. add `split[part]["risk"]`).
+4. Tests in `tests/test_drugbank.py`: mapping rules on synthetic descriptions; risk arrays aligned with edges; the loader returns risk.
+5. Rebuild `data/drugbank/drugbank_ddi.pt`. Print the class counts (expect about 20% high) and save them in this plan.
+
+**Step 2: metrics (about 1 day).**
+1. New `src/training/safety_metrics.py`: `threshold_at_specificity(neg_scores, 0.95)`, `mdir(pos_scores, pos_risk, t)`, `recall_by_risk(...)`, `risk_weighted_recall(...)`, `cch(scores_with, scores_without, risk, neg_with, neg_without, t, lam=0.5)`, `drr(def_attack, fedavg_attack, fedavg_clean)`.
+2. `scripts/cpu_pilot.py`: after each round's evaluation, compute t on validation negatives and log `test_mdir_high`, `test_recall_low/moderate/high`, `test_risk_weighted_recall`, `threshold`. With `--log-cch`, compute CCH for every client every round (leave-one-out on the clean anchor, for any method, so the metric is comparable across defenses) and log `cch` as a JSON list.
+3. `scripts/summarize_variants.py`: add these columns, plus DRR against FedAvg on the same seed and attack, and the honest false-exclusion rate.
+4. Unit tests with hand-computed toy scores.
+
+**Step 3: safety-critical attacks (about 1 day).**
+1. `src/data/poisoning.py`: `PoisonEvent` gains `hide_risk: float` (the fraction of the client's own high-risk positives to drop) and `fabricate_high: float` (fake pairs drawn among drug pairs whose ATC-class combination often carries high-risk interactions). `PoisoningSimulator` receives an `edge_risk` lookup keyed by `(min(u,v), max(u,v))`. Fabricated and hidden pairs are recorded so both metrics can be computed.
+2. `scripts/cpu_pilot.py` flags: `--hide-high FRAC`, `--fabricate-high FRAC`; attack presets in `scripts/gpu_variant_study.py`: `hideHigh` (2 attackers, frac 0.8, normal-size updates, severe drift), `hideHigh4` (4 attackers), `fabHigh`, `hideHighLIE` (the hidden pairs plus A Little Is Enough).
+3. Tests: the hidden pairs come only from the high-risk class; the counts match the fraction.
+4. Sanity check: under `hideHigh`, FedAvg's MDIR must rise by at least 0.05 while AUROC moves by less than 0.01. If not, raise the fraction or the attacker count before going on; the paper's premise depends on it.
+
+**Step 4: baselines (about 1–2 days).** In `src/training/robust_aggregation.py`, numpy only, using the same clean probe as CAGA:
+1. `lfr_aggregate`: for each client, the probe loss of the aggregate without it; remove the c clients whose removal lowers the loss most; average the rest. c = the true number of attackers (Fang et al.'s assumption, favourable to LFR).
+2. `err_aggregate`: the same with probe ranking error (1 − AUROC on the probe).
+3. `zeno_aggregate`: score_i = L(θ) − L(θ + Δᵢ) − ρ‖Δᵢ‖², keep the top n − b, average them (ρ = 0.0005, b = c).
+4. `krum_aggregate`, `median_aggregate`, `trimmed_mean_aggregate` (trim 20%).
+5. Wire them as `--method {lfr,err,zeno,krum,median,trimmed}` in the pilot and the study runner. Tests on toy updates for each.
+
+**Step 5: harm-gated CAGA (about 2 days).**
+1. `CAGAHyperparams`: `harm_gate: bool`, `harm_tol: float` (in high-risk interactions per round, as a fraction of |P_h|), `risk_weights: (1, 2, 3)`, `probe_high_frac: 0.5` (the probe oversamples high-risk positives to this share), `secret_probe: bool`.
+2. `caga_round`: when `harm_gate`, compute CCH_i for every client with the leave-one-out the reputation code already does. Only clients with CCH_i > harm_tol are eligible for shrinking or rejection, and moves are judged on the risk-weighted per-sample loss (`sample_weights` = risk weight of each probe positive, the same for every client). The final step-size check also uses the risk-weighted loss. Report `caga_cch` per client.
+3. Probe sampling (`sample_probe_edges`): stratify positives by risk to reach `probe_high_frac`; with `secret_probe`, seed with `hash(server_secret, round)` instead of the round number.
+4. Pilot flags `--caga-harm-gate --caga-harm-tol X --caga-secret-probe`; study method `caga_harm`.
+5. Tests: a client hiding high-risk pairs is gated while overall loss barely changes; an honest client is not; the tolerance is respected.
+
+**Step 6: tuning (DrugBank random split, seeds 10–11, validation only).** GPU via a new Kaggle notebook (add it to `scripts/make_kaggle_bundle.py`):
+- attacks `hideHigh`, `hideHigh4`, `fabHigh`, `moderate`, `testB`;
+- methods `fedavg`, `normclip`, `fltrust`, `lfr`, `zeno`, `median`, `caga`, `caga_harm` with harm_tol ∈ {0.005, 0.01, 0.02} and probe_high_frac ∈ {0.3, 0.5};
+- choose harm_tol and probe_high_frac by validation MDIR, subject to validation AUROC within 0.005 of FLTrust. Record the choice and the reason here before step 7.
+
+**Step 7: main results on fresh seeds 12–16 (5 seeds; never used before).**
+- DrugBank random split: every attack in the scope table plus `clean`, every baseline plus `caga` and `caga_harm`.
+- DrugBank cold-drug split: `clean`, `hideHigh`, `testB`.
+- ogbl-ddi: the general attacks only (no risk labels): `clean`, `strong`, `testA`, `testB`, `minmax`.
+- Add `signflip`, `gauss`, `minmax`, `minsum` and `ipm` attack presets first (step 4 style, in the pilot's update-replacement hook next to `lie_updates`).
+
+**Step 8: robustness of the defense itself (seeds 12–16, DrugBank).**
+1. Adaptive attacker: knows harm_tol and estimates CCH on its own data; each round it hides as many high-risk pairs as it can while keeping its estimated CCH just under the tolerance. Report cumulative MDIR over rounds, with and without `secret_probe`.
+2. Malicious majority: 6 of 10 clients hide high-risk pairs.
+3. On-off attacker: attacks in rounds 12–20 and 30–40 only.
+
+**Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
+
+**Step 10: full scale and cost.** Run the headline table (DrugBank, `clean`, `hideHigh`, `testB`; FedAvg, FLTrust, LFR, harm-gated CAGA; 3 seeds) through `main_fl.py` on Kaggle at full scale (hidden size 500, 200k observations, 100 rounds, `training.round_lr_decay=true` if the lrdecay check passed). This needs the new methods and metrics wired into `main_fl.py`'s strategy. Report runtime per round for every method.
+
+**Step 11: writing (about 1–2 weeks, overlapping with steps 8–10).** Outline:
+1. Introduction: patient-safety motivation and the threat.
+2. Related work: robust FL, validation-based defenses, graph and KG poisoning, DDI prediction.
+3. Threat model.
+4. Metrics: CCH, MDIR, DRR.
+5. Method: harm-gated CAGA.
+6. Setup: datasets, splits, risk mapping, federation, attacks, baselines, seeds.
+7. Results: the attack-by-defense table; MDIR vs AUROC; CCH traces; adaptive and majority attacks; cold drugs; ogbl-ddi generality; cost.
+8. Ablations.
+9. Limitations: template-based risk labels, backdoors and privacy out of scope, simulated federation, clean server data assumption.
+10. Conclusion.
+
+Figures: an MDIR-vs-AUROC scatter per defense (shows that accuracy hides harm); per-client CCH heatmap over rounds; cumulative MDIR under the adaptive attacker; DRR bars per attack.
+
+### Pass criteria for Paper A (fixed 2026-10-14, before any results)
+
+1. **Premise:** under `hideHigh`, FedAvg's MDIR rises by ≥ 0.05 with an AUROC change < 0.01 (step 3 sanity check). If this fails, the attack is strengthened before anything else.
+2. **Metric value:** at least one standard defense (FLTrust, LFR or Zeno) keeps AUROC within 0.01 of clean while its MDIR stays ≥ 0.03 above clean. This is the "accuracy hides harm" finding, and it carries the paper even if criterion 3 fails.
+3. **Defense:** on seeds 12–16, harm-gated CAGA has lower MDIR than FLTrust, LFR and Zeno under `hideHigh` and `hideHigh4`, with the paired 95% interval clear of zero; its AUROC is no more than 0.005 below FLTrust's under every attack; and its no-attack AUROC cost is ≤ 0.005.
+4. **Adaptive attacker:** with `secret_probe`, cumulative MDIR stays at least 50% below FedAvg's.
+
+Outcomes: 1–4 pass → full Paper A. Criteria 1, 2 and 4 pass but 3 does not → Paper A framed as threat, metric and benchmark, with CAGA as one of several defenses. Criterion 1 fails even after strengthening → return to the empirical study.
+
+### Timeline
+
+| Week | Work |
+| --- | --- |
+| 1 | Steps 1–4 (labels, metrics, attacks, baselines) |
+| 2 | Step 5 (harm gate) and step 6 (tuning) |
+| 3 | Steps 7–8 (main results, adaptive, majority) |
+| 4 | Steps 9–10 (ablations, full scale) and writing |
+| 5–6 | Writing, figures, internal review, submission |
+
 
 ## Thesis
 
