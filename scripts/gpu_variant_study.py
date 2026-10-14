@@ -43,6 +43,13 @@ METHODS = {
                   "--caga-secret-probe", "--caga-final-check", "cap"],
     "caga_harm_solo": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-harm-gate", "--caga-harm-mode", "solo",
                        "--caga-secret-probe", "--caga-outlier", "--caga-baseline", "--caga-final-check", "cap"],
+    # Defenses that need the number of attackers, given a fixed guess instead of the true count (the
+    # unnamed versions get the true count, an oracle the defender does not have).
+    "lfr_c2": ["--method", "lfr", "--byz-c", "2"],
+    "lfr_c4": ["--method", "lfr", "--byz-c", "4"],
+    "zeno_c2": ["--method", "zeno", "--byz-c", "2"],
+    "zeno_c4": ["--method", "zeno", "--byz-c", "4"],
+    "krum_c2": ["--method", "krum", "--byz-c", "2"],
     # Paper A baselines (step 4); LFR, ERR and Zeno use CAGA's clean probe.
     "lfr": ["--method", "lfr"],
     "err": ["--method", "err"],
@@ -76,6 +83,11 @@ ATTACKS = {
     "hideHigh4": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5"],
     "fabHigh": ["--cond", "joint", "--fabricate-high", "0.3", "--no-boost"],
     "hideHighLIE": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--lie-clients", "4", "5"],
+    # Attacker-count study: the hiding attack with 1 or 6 attackers (hideHigh = 2, hideHigh4 = 4), and
+    # A Little Is Enough with 1 attacker (testB2 = 2, testB = 4).
+    "hide1": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--poisoned-count", "1"],
+    "hide6": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5", "6", "7"],
+    "lie1": ["--cond", "drift", "--lie-clients", "0"],
 }
 
 

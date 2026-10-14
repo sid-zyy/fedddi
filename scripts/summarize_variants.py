@@ -39,13 +39,16 @@ GROUPS = {"moderate": {0: _P, 1: _P, 2: _D, 3: _D},
           "hideHigh4": {0: _P, 1: _P, 4: _P, 5: _P, 2: _D, 3: _D},
           "fabHigh": {0: _P, 1: _P, 2: _D, 3: _D},
           "hideHighLIE": {0: _P, 1: _P, 4: _P, 5: _P, 2: _D, 3: _D},
+          "hide1": {0: _P, 2: _D, 3: _D},
+          "hide6": {0: _P, 1: _P, 4: _P, 5: _P, 6: _P, 7: _P, 2: _D, 3: _D},
+          "lie1": {0: _P, 2: _D, 3: _D},
           "clean": {}}
 WINDOW_COLS = ("val_auroc", "test_auroc", "val_aupr", "test_aupr", "val_hits20", "test_hits20",
                "poison_fabricated_mean_prob", "poison_suppressed_mean_prob", "threshold",
                "val_mdir_high", "test_mdir_high", "test_recall_low", "test_recall_moderate", "test_recall_high",
                "val_risk_weighted_recall", "test_risk_weighted_recall")
 SHOW = ("val_auroc", "test_auroc", "test_hits20", "val_mdir_high", "test_mdir_high", "test_risk_weighted_recall",
-        "poison_fabricated_mean_prob", "poison_suppressed_mean_prob", "honest_false_exclusion",
+        "poison_fabricated_mean_prob", "poison_suppressed_mean_prob", "honest_false_exclusion", "attackers_excluded",
         "accepted_honest", "accepted_poisoned", "accepted_drifted", "cch_honest", "cch_poisoned", "cch_drifted",
         "drr_auroc", "drr_mdir")
 AFTER_ROUND = 22  # both poisoners active (client 1 starts 10 rounds after the round-12 onset)
@@ -74,6 +77,8 @@ def summarize_run(df: pd.DataFrame, atk: str) -> dict:
         ex = by_group("excluded", float)
         if "honest" in ex:
             r["honest_false_exclusion"] = ex["honest"]
+        if "poisoned" in ex:
+            r["attackers_excluded"] = ex["poisoned"]
     if "caga_verdict" in x:
         for grp, v in by_group("caga_verdict", lambda q: float(q == "accepted")).items():
             r[f"accepted_{grp}"] = v

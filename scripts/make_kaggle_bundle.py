@@ -37,6 +37,11 @@ CHECK_RISK = code(NL.join([
     "b = torch.load('/kaggle/working/fedddi/data/drugbank/drugbank_ddi.pt', weights_only=False)",
     "assert 'edge_risk' in b, 'drugbank_ddi.pt has no risk labels: upload the file rebuilt with prepare_drugbank.py --risk-only'",
     "print('risk labels present; high-risk share', float((b['edge_risk'] == 2).float().mean()))"]))
+def RUN(methods, attacks):
+    return code("!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset drugbank --seeds 10 11 "
+                f"--methods {methods} --attacks {attacks} --device cuda --parallel 3 --out /kaggle/working/results/paperA_count")
+
+
 PIP = 'pip install -q torch-geometric ogb "flwr[simulation]>=1.10" hydra-core omegaconf'
 PACK = code(NL.join(["import shutil", "shutil.make_archive('/kaggle/working/results', 'zip', '/kaggle/working/results')",
                      "print('Download results.zip from the Output tab')"]))
@@ -142,6 +147,25 @@ nbs = {
         md("## 5. Summary table"),
         code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_tune"),
         md("## 6. Package results"), PACK],
+    'fedddi_paperA_attacker_count.ipynb': [
+        md("# FedDDI-CAGA Paper A: unknown number of attackers (DrugBank, GPU)" + NL + NL + HEAD + NL + NL + PRIVATE
+           + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL +
+           "102 runs on tuning seeds 10 and 11. LFR, Zeno and Krum must be told the number of attackers; here they get "
+           "a fixed guess (2, or 4) instead of the true number, while the true number of attackers varies (1, 2, 4, 6 for "
+           "hiding high-risk interactions; 1, 2, 4 for A Little Is Enough). FedAvg, FLTrust and CAGA need no count. "
+           "About 4 hours; finished runs are skipped if you run it again."),
+        md("## 1. Copy the code and the DrugBank file"), COPY, COPY_DB, CHECK_RISK,
+        md("## 2. Install packages"), bash(PIP),
+        md("## 3. One and six hiders, one A Little Is Enough attacker: every method"),
+        RUN("fedavg fltrust caga lfr zeno krum lfr_c2 zeno_c2 krum_c2", "hide1 hide6 lie1"),
+        md("## 4. Overestimated count (4) with one attacker"), RUN("lfr_c4 zeno_c4", "hide1 lie1"),
+        md("## 5. Two A Little Is Enough attackers"), RUN("fedavg fltrust caga lfr zeno krum lfr_c4 zeno_c4", "testB2"),
+        md("## 6. Two hiders: Krum and the overestimate"), RUN("krum lfr_c4 zeno_c4", "hideHigh"),
+        md("## 7. Four attackers with the guess of 2, and Krum"), RUN("krum lfr_c2 zeno_c2 krum_c2", "hideHigh4 testB"),
+        md("## 8. Krum with no attack"), RUN("krum", "clean"),
+        md("## 9. Summary table"),
+        code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_count"),
+        md("## 10. Package results"), PACK],
     'fedddi_paperA_tune_harm.ipynb': [
         md("# FedDDI-CAGA Paper A, step 6b: harm-gated CAGA grid (DrugBank, GPU)" + NL + NL + HEAD + NL + NL + PRIVATE
            + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL +

@@ -77,6 +77,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=8192)
     p.add_argument("--lr", type=float, default=0.003)
     p.add_argument("--poison-strength", choices=("moderate", "strong"), default="moderate")
+    p.add_argument("--poisoned-count", type=int, default=None,
+                   help="Keep only the first K of the protocol's poisoned clients (e.g. 1 for a single attacker).")
     p.add_argument("--extra-poisoned", type=int, nargs="*", default=[],
                    help="More poisoned clients; each copies the protocol's poison events in turn.")
     p.add_argument("--no-boost", action="store_true", help="Poisoned clients send normal-size updates.")
@@ -163,6 +165,8 @@ def build_events(a: argparse.Namespace, num_features: int = 50):
                           emerge=s.get("emerge", {}), kind=s.get("kind", "sudden"),
                           transition_rounds=s.get("transition_rounds", 10), update_scale=s.get("update_scale", 1.0))
               for s in poison_specs[pk]]
+    if a.poisoned_count is not None:
+        poison = poison[:a.poisoned_count]
     if a.hide_high or a.fabricate_high:
         # Safety-critical poisoning: the same clients and timing, but they target high-risk interactions.
         for e in poison:
