@@ -232,6 +232,17 @@ Test, criteria fixed before running (CPU, DrugBank random, tuning seeds 10–11,
 - **The CPU study keeps running unchanged** so the pre-registered comparison is complete; its `caga_cal` rows will be read as the stalled version. The pre-registered fallback "try k = 2" is not pursued: neither observed failure (the stall, the masking) depends on k.
 - **Open: coordinated identical updates.** A group-aware test (leave out clusters of near-identical updates) is the natural fix for A Little Is Enough masking; deferred until the step 6 results show whether it is needed for the paper (plain `caga` stays in every table).
 
+**Step 5a result (2026-10-14, CPU, seeds 10–11, 16 of 20 runs; `caga_out` still running): `caga_cal` fails and is not adopted.**
+
+| Attack | Val AUROC caga / cal | Val MDIR caga / cal | Honest false exclusion caga / cal | Attackers fully accepted caga / cal |
+| --- | --- | --- | --- | --- |
+| clean | 0.935 / 0.924 | 0.474 / 0.537 | 0.50 / 0.005 | – |
+| moderate | 0.935 / 0.927 | 0.445 / 0.496 | 0.32 / 0.00 | 0.03 / 0.75 |
+| testB | 0.915 / 0.908 | 0.560 / 0.588 | 0.49 / 0.01 | 0.10 / 1.00 |
+| hideHigh4 | 0.932 / 0.925 | 0.518 / 0.535 | 0.34 / 0.00 | 0.61 / 1.00 |
+
+(i) passes (false exclusion 0.5% with no attack); (ii) fails (attackers excluded in 0% of post-onset rounds under test B and 25% under moderate, against ≥ 80% required); (iii) fails (AUROC 0.007–0.011 below `caga` under every attack). The final step was refused (step size 0) in up to 89% of rounds after round 22, which explains the AUROC loss; the cap-only fix (`caga_cal2`) is untested and runs in the Kaggle baselines notebook. Even plain `caga` lets the four hiders through in 61% of rounds (validation MDIR 0.518 vs 0.474 clean), so neither version is a good defense against `hideHigh4`; that is the harm gate's job (step 6). **Decision: plain `caga` stays CAGA's default; `caga_cal` is a negative ablation; `caga_cal2` is judged on the Kaggle results with the same three criteria.**
+
 **Step 5b: harm-gated CAGA, implemented (2026-10-14).** `CAGAHyperparams.harm_gate`, `harm_tol`, `harm_mode`, `harm_lambda`, `risk_weights`; `caga_round(..., score_fn, probe_risk)`; `sample_risk_probe` (stratified to `probe_high_frac`) and `probe_seed` (secret hash) in `src/training/caga_probe.py`; pilot `--caga-harm-gate --caga-harm-tol --caga-harm-mode --caga-probe-high-frac --caga-secret-probe`; study methods `caga_harm` and `caga_harm_solo`; tests in `tests/test_caga.py` and `tests/test_caga_probe.py`. Decisions and reasons:
 - **Two harm modes.** `loo` is the plan's definition (CCH of including the client). `solo` (added) compares the client's own model with the full aggregate. Reason: in the step 3 runs, leave-one-out CCH could not separate four coordinated hiders, and the toy test reproduces it exactly (four hiders: every client's leave-one-out CCH is 0; solo CCH flags all four and no honest client). Solo harm also penalises honest specialists (their own model misses the classes they lack), so `caga_harm_solo` adds the step 5a calibration: the outlier score and warm-up baseline are computed on the harm values.
 - **Threshold:** the full aggregate's 95%-specificity threshold on the probe negatives, used for every comparison in the round (same reasoning as for the logged CCH).
