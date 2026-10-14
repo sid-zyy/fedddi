@@ -123,6 +123,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--caga-harm-tol", type=float, default=0.01,
                    help="CCH tolerance as a share of the probe's high-risk positives.")
     p.add_argument("--caga-harm-mode", choices=("loo", "solo"), default="loo")
+    p.add_argument("--caga-harm-rep", action="store_true",
+                   help="Gate on each client's running mean harm, relative to the median client's.")
+    p.add_argument("--caga-harm-rep-delta", type=float, default=0.2)
     p.add_argument("--caga-probe-high-frac", type=float, default=0.5,
                    help="With --caga-harm-gate: share of probe positives drawn from high-risk pairs.")
     p.add_argument("--caga-secret-probe", action="store_true",
@@ -335,7 +338,8 @@ def main() -> None:
                          reputation=a.caga_reputation, rep_beta=a.caga_rep_beta, rep_threshold=a.caga_rep_threshold,
                          outlier_gate=a.caga_outlier, outlier_k=a.caga_outlier_k, baseline_gate=a.caga_baseline,
                          harm_gate=a.caga_harm_gate, harm_tol=a.caga_harm_tol, harm_mode=a.caga_harm_mode,
-                         final_check_mode=a.caga_final_check)
+                         final_check_mode=a.caga_final_check, harm_rep=a.caga_harm_rep,
+                         harm_rep_delta=a.caga_harm_rep_delta)
     if a.caga_harm_gate and not has_risk:
         raise SystemExit("--caga-harm-gate needs risk labels (DrugBank)")
     caga_state: Dict[str, Any] = {}

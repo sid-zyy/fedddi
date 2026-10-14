@@ -58,6 +58,14 @@ METHODS = {
     "median": ["--method", "median"],
     "trimmed": ["--method", "trimmed"],
 }
+# Harm reputation (step 6d): solo harm, running mean per client, gated above (1 + delta) x the median
+# client's; no cross-client calibration; cap-only final check.
+for _d in ("0.1", "0.2", "0.3"):
+    METHODS[f"harm_rep_d{_d.replace('0.', '')}"] = [
+        "--method", "caga_noblock", "--caga-warmup", "5", "--caga-harm-gate", "--caga-harm-mode", "solo",
+        "--caga-harm-tol", "0", "--caga-secret-probe", "--caga-final-check", "cap",
+        "--caga-harm-rep", "--caga-harm-rep-delta", _d]
+
 # Step 6 grid (Paper A): harm tolerance x high-risk share of the probe, for both harm modes. Names avoid dots
 # so summarize_variants.py can parse them: t005 = 0.005, h3 = 0.3.
 HARM_GRID = [(tol, hf) for tol in ("0.005", "0.01", "0.02") for hf in ("0.3", "0.5")]

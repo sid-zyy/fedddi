@@ -90,6 +90,13 @@ class CAGAHyperparams:
     harm_mode: str = "loo"
     harm_lambda: float = 0.5
     risk_weights: Tuple[float, float, float] = (1.0, 2.0, 3.0)
+    # Harm reputation: keep each client's running mean of its per-round harm from the end of warm-up
+    # (in `state`) and gate only clients whose running mean exceeds (1 + harm_rep_delta) times the median
+    # client's. Single rounds are noisy (per-round solo harm separates hiders from honest clients with an
+    # AUC of about 0.7), a client's mean over rounds much less so (about 0.8-0.9 on the tuning seeds).
+    # Used with harm_mode "solo"; harm_tol still applies to the running mean (0 disables it).
+    harm_rep: bool = False
+    harm_rep_delta: float = 0.2
 
 
 @dataclass
@@ -318,8 +325,23 @@ def caga_round(
         harm, risk_w = _harm_scores(hp, old_arrays, client_arrays, e, all_blocks, block_map, aggregate,
                                     score_fn, np.asarray(probe_risk))
         n_high = int((np.asarray(probe_risk) == 2).sum())
+        level = list(harm)
+        if hp.harm_rep:
+            if state is None:
+                raise ValueError("hp.harm_rep needs a `state` dict that persists across rounds")
+            book = state.setdefault("harm_rep", {})
+            for i in range(n):
+                tot, cnt = book.get(client_keys[i], (0.0, 0))
+                if not warm:
+                    tot, cnt = tot + harm[i], cnt + 1
+                    book[client_keys[i]] = (tot, cnt)
+                level[i] = tot / cnt if cnt else 0.0
+            med = float(np.median(level))
+            for i in range(n):
+                eligible[i] = eligible[i] and level[i] > (1.0 + hp.harm_rep_delta) * med
         for i in range(n):
-            eligible[i] = eligible[i] and harm[i] > hp.harm_tol * n_high
+            eligible[i] = eligible[i] and level[i] > hp.harm_tol * n_high
+        harm = level
         wts = [risk_w] * n
 
     outlier = [0.0] * n

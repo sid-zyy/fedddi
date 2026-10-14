@@ -166,6 +166,24 @@ nbs = {
         md("## 9. Summary table"),
         code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_count"),
         md("## 10. Package results"), PACK],
+    'fedddi_paperA_harm_rep.ipynb': [
+        md("# FedDDI-CAGA Paper A, step 6d: harm reputation (DrugBank, GPU)" + NL + NL + HEAD + NL + NL + PRIVATE
+           + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL +
+           "36 runs on tuning seeds 10 and 11: harm-gated CAGA that gates a hospital only when its running mean "
+           "clinical harm exceeds the median hospital's by more than delta (0.1, 0.2, 0.3), with no attack and under "
+           "hideHigh, hideHigh4, fabHigh, moderate and test B. About 1.5 to 2 hours. Finished runs are skipped if you "
+           "run it again."),
+        md("## 1. Copy the code and the DrugBank file"), COPY, COPY_DB, CHECK_RISK,
+        md("## 2. Install packages and check the code version"),
+        bash(PIP, "cd /kaggle/working/fedddi", "grep -q harm_rep_delta src/training/caga.py || "
+             "{ echo 'old fedddi_code.zip: upload the latest one'; exit 1; }"),
+        md("## 3. Runs (live progress below)"),
+        code("!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset drugbank --seeds 10 11 "
+             "--methods harm_rep_d1 harm_rep_d2 harm_rep_d3 --attacks clean hideHigh hideHigh4 fabHigh moderate testB "
+             "--device cuda --parallel 3 --out /kaggle/working/results/paperA_harm_rep"),
+        md("## 4. Summary table"),
+        code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_harm_rep"),
+        md("## 5. Package results"), PACK],
     'fedddi_paperA_tune_harm.ipynb': [
         md("# FedDDI-CAGA Paper A, step 6b: harm-gated CAGA grid (DrugBank, GPU)" + NL + NL + HEAD + NL + NL + PRIVATE
            + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL +

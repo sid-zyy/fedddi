@@ -431,3 +431,43 @@ def test_cap_final_check_takes_a_slightly_worse_full_step_that_the_z_check_refus
     with pytest.raises(ValueError):
         caga_round(start, clients, list("abcd"), [1.0] * 4, BLOCK_MAP, loss_fn,
                    CAGAHyperparams(final_check_mode="x", **kw), 9)
+
+
+def _rep_rounds(delta, rounds=10, sd=0.25, seed=0):
+    rng = np.random.default_rng(seed)
+    old, _, score_fn, loss_fn, risk = _harm_env(0, seed=seed)
+
+    def client(d0, d1):
+        m = np.zeros(D)
+        m[0], m[1] = d0 + sd * rng.normal(), d1 + sd * rng.normal()
+        return [np.zeros(D), np.zeros(D), m]
+
+    hp = CAGAHyperparams(gate_blocks=False, final_check=False, harm_gate=True, harm_mode="solo", harm_tol=0.0,
+                         harm_rep=True, harm_rep_delta=delta, warmup_rounds=1)
+    state, reports = {}, []
+    for rnd in range(1, rounds + 1):
+        clients = [client(1.5, 1.5) for _ in range(8)] + [client(1.1, 1.6) for _ in range(2)]  # 8, 9 hide mildly
+        reports.append(caga_round(old, clients, [str(i) for i in range(10)], [1.0] * 10, BLOCK_MAP, loss_fn, hp,
+                                  rnd, state=state, score_fn=score_fn, probe_risk=risk)[1])
+    return reports, state
+
+
+def test_harm_reputation_singles_out_persistent_mild_hiders():
+    reports, state = _rep_rounds(delta=0.3)
+    level = {k: tot / cnt for k, (tot, cnt) in state["harm_rep"].items()}
+    assert sorted(level, key=level.get)[-2:] in (["8", "9"], ["9", "8"])  # the two hiders have the highest means
+    last = reports[-1].clients
+    assert [round(c.cch, 6) for c in last] == [round(level[str(i)], 6) for i in range(10)]  # reported = running mean
+    honest_gated = sum(c.verdict != "accepted" for r in reports[-3:] for c in r.clients[:8])
+    hider_gated = sum(c.verdict != "accepted" for r in reports[-3:] for c in r.clients[8:])
+    assert hider_gated == 6 and honest_gated <= 3  # hiders every time; honest at most 1 in 8 client-rounds
+
+
+def test_harm_reputation_ignores_warmup_and_needs_state():
+    reports, state = _rep_rounds(delta=0.3, rounds=1)
+    assert state["harm_rep"] == {} and all(c.verdict == "accepted" for c in reports[0].clients)
+    old, clients, score_fn, loss_fn, risk = _harm_env(1)
+    hp = CAGAHyperparams(harm_gate=True, harm_mode="solo", harm_rep=True)
+    with pytest.raises(ValueError):
+        caga_round(old, clients, [str(i) for i in range(10)], [1.0] * 10, BLOCK_MAP, loss_fn, hp, 3,
+                   score_fn=score_fn, probe_risk=risk)
