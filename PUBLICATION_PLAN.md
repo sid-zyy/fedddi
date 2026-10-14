@@ -328,6 +328,32 @@ What it shows:
 
 The proposal as first written: "harm reputation": each client's running mean of solo CCH from the end of warm-up, no baseline and no cross-client z-score; a client is gated when its running mean exceeds (1 + δ) × the median client's, δ ∈ {0.1, 0.2, 0.3}; cap-only final check. About 36 Kaggle runs (3 δ × 5 attacks + clean, seeds 10–11). The step 6 selection rule above applies unchanged.
 
+**Attacker-count study result (2026-10-14, Kaggle, 102 runs plus the step 6a runs at m = 2 and 4; `results/kaggle_attacker_count/`, combined table `combined_runs.csv`; seeds 10–11, validation).**
+
+Hiding (validation MDIR, lower is better), by number of attackers m:
+
+| m | FedAvg | FLTrust | CAGA | LFR c=2 / c=4 / true | Zeno c=2 / c=4 / true | Krum c=2 / true |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 0.490 | **0.436** | 0.469 | 0.478 / 0.478 / 0.481 | 0.491 / **0.430** / 0.469 | 0.625 / 0.606 |
+| 2 | 0.506 | **0.443** | 0.482 | 0.500 / 0.484 / 0.500 | 0.502 / 0.459 / 0.502 | 0.644 / 0.644 |
+| 4 | 0.536 | 0.499 | 0.506 | 0.547 / 0.533 / 0.533 | 0.534 / **0.495** / 0.495 | 0.633 / 0.614 |
+| 6 | 0.580 | 0.564 | **0.537** | 0.583 / – / 0.578 | 0.578 / – / 0.542 | 0.695 / 0.711 |
+
+A Little Is Enough (validation AUROC): m = 1: CAGA 0.931, FLTrust 0.935, LFR/Zeno 0.934–0.936 whatever the guess; m = 2: CAGA 0.930, the others 0.932–0.935; m = 4: CAGA 0.914, LFR c=2 0.906, Zeno c=2 0.900, LFR/Zeno c=4 0.916/0.914, FLTrust 0.907, Krum 0.62–0.64.
+
+**Against the pre-registered rule** (CAGA beats the guessed-c version at every m ∈ {1, 2, 4} of a family, on both seeds):
+- **Passes vs Zeno with c = 2 under hiding** (CAGA lower MDIR on both seeds at m = 1, 2, 4, and at m = 6).
+- **Passes vs Krum** (both guesses, both families), but Krum fails on DrugBank even with the true count (MDIR 0.61–0.71; AUROC 0.62 under test B), so this says nothing about the count.
+- **Fails vs LFR with c = 2 under hiding** only at m = 1 on seed 11 (−0.004); it passes at m = 2, 4 and 6.
+- **Fails vs any c = 4 guess, and vs c = 2 under A Little Is Enough at m = 1–2**, where LFR and Zeno are 0.002–0.006 AUROC ahead.
+
+What it means:
+- **Under-estimating the count is what hurts LFR and Zeno**: at m = 4 with c = 2 they lose 0.04–0.05 MDIR under hiding (0.534–0.547 vs CAGA 0.506) and 0.008–0.015 AUROC under A Little Is Enough. A defender who guesses high (c = 4) does as well as CAGA or better, with fewer false alarms (15–29% vs CAGA's 29–41%). So "needs no count" is an advantage only against an optimistic guess. Over-guessing even helps MDIR under hiding (Zeno c = 4 is the best at m = 1 and 4), because dropping extra clients also drops the drifted ones, which cause the most harm.
+- **CAGA degrades least as attackers increase.** From m = 1 to 6 its MDIR rises by 0.068, against 0.128 for FLTrust and 0.090 for FedAvg; it goes from mid-table at m = 1 to the lowest MDIR of all methods at m = 6 (0.537; FLTrust 0.564, Zeno with the true count 0.542, LFR 0.578). At m = 6 it beats FLTrust and LFR on both seeds (by 0.015–0.051) and Zeno-with-true-count on one (seed 10 +0.003 worse, seed 11 0.013 better). m = 6 is a malicious majority and was declared "report, not claim"; it is tested formally in step 8 (malicious majority) on seeds 12–16.
+- **Detection when attackers are few**: with one or two attackers, LFR and Zeno given the true count almost never remove the attacker (0–4% of attacker rounds; leave-one-out picks other clients, likely the drifted ones), while CAGA removes them in 58–100% (hide1 0.71, hideHigh 0.58, lie1 1.00, testB2 0.95). Its accuracy does not benefit, because one or two attackers barely hurt the model.
+
+**Decision (2026-10-14):** candidate CAGA claims for step 7–8, to be tested on seeds 12–16 and stated only if they replicate: (1) "CAGA degrades least as the number of attackers grows, and has the lowest MDIR with a malicious majority" (add `hide6` and a 6-attacker A Little Is Enough variant with a fixed z to step 8); (2) "CAGA identifies attackers even when they are few, where leave-one-out defenses do not"; (3) "against an under-estimated attacker count, CAGA beats LFR and Zeno". The claim "CAGA needs no attacker count" is not made without the qualifier in (3), because a high guess matches it.
+
 ### Pass criteria for Paper A (fixed 2026-10-14, before any results)
 
 1. **Premise:** under `hideHigh`, FedAvg's MDIR rises by ≥ 0.05 with an AUROC change < 0.01 (step 3 sanity check). If this fails, the attack is strengthened before anything else.
