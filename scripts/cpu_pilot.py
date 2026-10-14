@@ -35,7 +35,8 @@ from src.data.features import compute_fixed_global_features  # noqa: E402
 from src.data.local_observations import generate_client_observations  # noqa: E402
 from src.data.poisoning import PoisonEvent, PoisoningSimulator  # noqa: E402
 from src.training.caga import CAGAHyperparams, caga_round, make_probe_loss_fn  # noqa: E402
-from src.training.caga_probe import compute_block_index_map, sample_probe_edges  # noqa: E402
+from src.training.caga_probe import (  # noqa: E402
+    compute_block_index_map, probe_seed, sample_probe_edges, sample_risk_probe)
 from src.training.caga import pairwise_rank_loss  # noqa: E402
 from src.training.caga_probe import score_arrays_on_probe  # noqa: E402
 from src.training.evaluate import score_edges  # noqa: E402
@@ -108,6 +109,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--caga-reputation", action="store_true", help="Gate only clients with a bad running record.")
     p.add_argument("--caga-rep-beta", type=float, default=0.7)
     p.add_argument("--caga-rep-threshold", type=float, default=1.0)
+    p.add_argument("--caga-outlier", action="store_true",
+                   help="Only clients whose leave-one-out effect is a robust outlier across clients may be gated.")
+    p.add_argument("--caga-outlier-k", type=float, default=3.0)
+    p.add_argument("--caga-baseline", action="store_true",
+                   help="With --caga-outlier: subtract each client's warm-up score first.")
+    p.add_argument("--caga-harm-gate", action="store_true",
+                   help="Harm-gated CAGA (Paper A): gate only clients whose CCH on the probe exceeds the tolerance.")
+    p.add_argument("--caga-harm-tol", type=float, default=0.01,
+                   help="CCH tolerance as a share of the probe's high-risk positives.")
+    p.add_argument("--caga-harm-mode", choices=("loo", "solo"), default="loo")
+    p.add_argument("--caga-probe-high-frac", type=float, default=0.5,
+                   help="With --caga-harm-gate: share of probe positives drawn from high-risk pairs.")
+    p.add_argument("--caga-secret-probe", action="store_true",
+                   help="Seed each round's probe with a server secret instead of the round number.")
     p.add_argument("--device", default="cpu", help="cpu or cuda; GPU runs use the same protocol.")
     p.add_argument("--clip-multiplier", type=float, default=1.5)
     p.add_argument("--root-obs", type=int, default=None,
@@ -274,6 +289,7 @@ def main() -> None:
         perm = torch.randperm(train_full.size(0), generator=torch.Generator().manual_seed(a.seed + 999))
         n_root = max(50, int(a.root_frac * train_full.size(0)))
         root_edges, client_pool = train_full[perm[:n_root]].clone(), train_full[perm[n_root:]].clone()
+        root_risk = split["train"]["risk"][perm[:n_root]].clone() if "risk" in split["train"] else None
 
     datasets = generate_client_observations(train_edges=client_pool, num_clients=a.num_clients,
                                             atc_mapping=atc_mapping, observations_per_client=a.obs_per_client,
@@ -310,7 +326,11 @@ def main() -> None:
     root_trainer = root_client = block_map = None
     hp = CAGAHyperparams(probe_size=a.probe_size, gate_blocks=a.method != "caga_noblock", tol_z=a.caga_tol_z,
                          tol_rel=a.caga_tol_rel, warmup_rounds=a.caga_warmup, class_aware=a.caga_class_aware,
-                         reputation=a.caga_reputation, rep_beta=a.caga_rep_beta, rep_threshold=a.caga_rep_threshold)
+                         reputation=a.caga_reputation, rep_beta=a.caga_rep_beta, rep_threshold=a.caga_rep_threshold,
+                         outlier_gate=a.caga_outlier, outlier_k=a.caga_outlier_k, baseline_gate=a.caga_baseline,
+                         harm_gate=a.caga_harm_gate, harm_tol=a.caga_harm_tol, harm_mode=a.caga_harm_mode)
+    if a.caga_harm_gate and not has_risk:
+        raise SystemExit("--caga-harm-gate needs risk labels (DrugBank)")
     caga_state: Dict[str, Any] = {}
     # A client's share of each drug class, from its own observation mixture (coarse metadata the
     # server is assumed to know). The probe sample's class is its first drug's ATC class, the same
@@ -346,11 +366,17 @@ def main() -> None:
             pick = torch.randint(0, root_edges.size(0), (a.root_obs or a.obs_per_client,), generator=g)
             root_trainer.split["train"]["edge"] = root_edges[pick]
             server_arrays = root_client.fit(params, {"server_round": rnd})[0]
-        loss_fn = probe = sw = None
+        loss_fn = probe = sw = score_fn = probe_risk = None
         if a.method in PROBE_METHODS:
-            probe = sample_probe_edges(root_pos_edges=root_trainer.split["train"]["edge"], num_nodes=num_nodes,
-                                       m=hp.probe_size, seed=rnd, device=device,
-                                       exclude_edge_index=root_trainer.edge_index)
+            pseed = probe_seed(rnd, f"server-secret-{a.seed}" if a.caga_secret_probe else None)
+            if a.caga_harm_gate:
+                probe, probe_risk = sample_risk_probe(root_edges, root_risk, num_nodes, hp.probe_size, pseed, device,
+                                                      root_trainer.edge_index, a.caga_probe_high_frac)
+                score_fn = lambda x: score_arrays_on_probe(root_trainer, block_map, x, probe)  # noqa: E731
+            else:
+                probe = sample_probe_edges(root_pos_edges=root_trainer.split["train"]["edge"], num_nodes=num_nodes,
+                                           m=hp.probe_size, seed=pseed, device=device,
+                                           exclude_edge_index=root_trainer.edge_index)
             loss_fn = make_probe_loss_fn(root_trainer, block_map, probe)
             if a.caga_class_aware and atc_mapping is not None:
                 cls = atc_mapping[probe[: probe.size(0) // 2, 0].cpu()].numpy()
@@ -401,7 +427,8 @@ def main() -> None:
                 new, _ = trimmed_mean_aggregate(arrs, a.trim, rnd)
             else:
                 new, r = caga_round(params, arrs, [str(i) for i in idx], w, block_map, loss_fn, hp, rnd,
-                                    sample_weights=[sw[i] for i in idx] if sw is not None else None, state=state)
+                                    sample_weights=[sw[i] for i in idx] if sw is not None else None, state=state,
+                                    score_fn=score_fn, probe_risk=probe_risk)
                 fields.update(r.as_row_fields())
                 excluded = [c.verdict != "accepted" for c in r.clients]
             return [n.astype(p.dtype, copy=False) for n, p in zip(new, params)], fields, excluded

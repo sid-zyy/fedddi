@@ -285,3 +285,132 @@ def test_reputation_builds_during_warmup_without_gating():
     r1 = _rep_round(c, old, -1.0, hp, state, 1)
     assert r1.clients[1].alpha == 1.0 and state["reputation"]["1"] > hp.rep_threshold
     assert _rep_round(c, old, -1.0, hp, state, 2).clients[1].alpha < 1.0
+
+
+# ---- Calibrated eligibility: outlier gate and warm-up baseline ----
+
+def _federation(bias, seed=1, attacker=True):
+    """Seven honest clients, two specialists pulled +/- bias along one axis, and (optionally) an attacker."""
+    old, _, loss_fn, toward, away = make_env(0)
+    rng = np.random.default_rng(seed)
+    clients = [[a + 0.05 * rng.normal(size=D) for a in toward(0.6)] for _ in range(7)]
+    clients += [[a + sgn * bias * np.eye(D)[0] for a in toward(0.6)] for sgn in (1, -1)]
+    if attacker:
+        clients.append(away(0.6))
+    return old, loss_fn, clients
+
+
+def _run(old, loss_fn, clients, hp, rnd=1, state=None):
+    n = len(clients)
+    return caga_round(old, clients, [str(i) for i in range(n)], [1.0] * n, BLOCK_MAP, loss_fn, hp, rnd,
+                      state={} if state is None else state)[1]
+
+
+def test_robust_scores():
+    z = caga.robust_scores(np.array([1.0, 2.0, 3.0, 4.0, 100.0]))
+    assert z[2] == 0.0 and z[4] > 50  # the outlier cannot inflate the scale
+    assert caga.robust_scores(np.array([5.0, 5.0, 5.0, 6.0]))[3] > 10  # zero MAD is handled
+    assert np.all(caga.robust_scores(np.zeros(3)) == 0)
+
+
+def test_outlier_gate_keeps_honest_specialists_and_still_drops_the_attacker():
+    old, loss_fn, clients = _federation(bias=0.3)
+    plain = _run(old, loss_fn, clients, CAGAHyperparams(gate_blocks=False, final_check=False))
+    assert sum(c.verdict != "accepted" for c in plain.clients[:9]) >= 2  # the false alarms being fixed
+    cal = _run(old, loss_fn, clients, CAGAHyperparams(gate_blocks=False, final_check=False, outlier_gate=True))
+    assert all(c.verdict == "accepted" for c in cal.clients[:9])
+    assert cal.clients[9].verdict == "rejected" and cal.clients[9].outlier > 10
+
+
+def test_outlier_gate_with_no_attacker_accepts_everyone():
+    old, loss_fn, clients = _federation(bias=0.3, attacker=False)
+    r = _run(old, loss_fn, clients, CAGAHyperparams(gate_blocks=False, final_check=False, outlier_gate=True))
+    assert all(c.verdict == "accepted" for c in r.clients)
+
+
+def test_baseline_cancels_a_specialists_steady_offset_but_catches_a_client_that_turns():
+    old, loss_fn, clients = _federation(bias=1.0, attacker=False)
+    hp_out = CAGAHyperparams(gate_blocks=False, final_check=False, outlier_gate=True, outlier_k=3.0)
+    assert _run(old, loss_fn, clients, hp_out, rnd=3).clients[7].verdict != "accepted"  # strong specialist: outlier
+    hp = CAGAHyperparams(gate_blocks=False, final_check=False, outlier_gate=True, baseline_gate=True,
+                         warmup_rounds=2)
+    state = {}
+    for rnd in (1, 2):  # warm-up: baselines recorded, nobody gated
+        r = _run(old, loss_fn, clients, hp, rnd, state)
+        assert all(c.verdict == "accepted" for c in r.clients)
+    r = _run(old, loss_fn, clients, hp, 3, state)
+    assert all(c.verdict == "accepted" for c in r.clients)  # specialist's offset subtracted
+    _, _, _, _, away = make_env(0)
+    turned = clients[:3] + [away(0.6)] + clients[4:]
+    r = _run(old, loss_fn, turned, hp, 4, state)
+    assert r.clients[3].verdict == "rejected"
+    assert state["outlier_baseline"]["3"][1] == 2  # baseline frozen after warm-up
+
+
+def test_baseline_gate_needs_state():
+    old, loss_fn, clients = _federation(bias=0.3)
+    hp = CAGAHyperparams(gate_blocks=False, final_check=False, outlier_gate=True, baseline_gate=True)
+    with pytest.raises(ValueError):
+        caga_round(old, clients, [str(i) for i in range(10)], [1.0] * 10, BLOCK_MAP, loss_fn, hp, 1, state=None)
+
+
+# ---- Harm gate: high-risk positives depend on one model coordinate, the rest on another ----
+
+def _harm_env(n_bad, seed=0):
+    rng = np.random.default_rng(seed)
+    n_pos, n_neg = 500, 500
+    risk = np.where(np.arange(n_pos) < 100, 2, rng.integers(0, 2, n_pos))
+    bp, bn = rng.normal(0, 1, n_pos), rng.normal(0, 1, n_neg)
+
+    def score_fn(a):
+        return np.concatenate([bp + np.where(risk == 2, a[2][0], a[2][1]), bn])
+
+    def loss_fn(a):
+        return caga.pairwise_rank_loss(score_fn(a), n_pos)
+
+    def client(d0, d1):
+        m = np.zeros(D)
+        m[0], m[1] = d0 + 0.1 * rng.normal(), d1 + 0.1 * rng.normal()
+        return [np.zeros(D), np.zeros(D), m]
+
+    # Honest clients improve both kinds of pair; hiders push high-risk pairs down and the rest up.
+    clients = [client(1.5, 1.5) for _ in range(10 - n_bad)] + [client(-3.0, 2.5) for _ in range(n_bad)]
+    return [np.zeros(D) for _ in range(3)], clients, score_fn, loss_fn, risk
+
+
+def _harm_run(n_bad, **kw):
+    old, clients, score_fn, loss_fn, risk = _harm_env(n_bad)
+    hp = CAGAHyperparams(gate_blocks=False, final_check=False, harm_gate=True, **kw)
+    return caga_round(old, clients, [str(i) for i in range(10)], [1.0] * 10, BLOCK_MAP, loss_fn, hp, 1,
+                      state={}, score_fn=score_fn, probe_risk=risk)[1]
+
+
+@pytest.mark.parametrize("mode", ["loo", "solo"])
+def test_harm_gate_drops_a_hider_and_keeps_honest_clients(mode):
+    r = _harm_run(1, harm_mode=mode, harm_tol=0.02)
+    assert r.clients[9].verdict == "rejected" and r.clients[9].cch > 0.02 * 100
+    assert all(c.verdict == "accepted" and c.cch == 0 for c in r.clients[:9])
+
+
+def test_harm_tolerance_is_respected():
+    r = _harm_run(1, harm_mode="loo", harm_tol=1.0)  # 100 hidden pairs needed: never reached
+    assert all(c.verdict == "accepted" for c in r.clients)
+    assert r.clients[9].cch > 0  # the harm is still measured and reported
+
+
+def test_solo_harm_is_not_masked_by_coordinated_hiders():
+    loo = _harm_run(4, harm_mode="loo", harm_tol=0.02)
+    assert all(c.cch == 0 for c in loo.clients)  # removing one of four hiders changes nothing
+    solo = _harm_run(4, harm_mode="solo", harm_tol=0.02)
+    assert all(c.verdict == "rejected" for c in solo.clients[6:])
+    assert all(c.verdict == "accepted" for c in solo.clients[:6])
+
+
+def test_harm_gate_needs_scores_and_rejects_unknown_mode():
+    old, clients, score_fn, loss_fn, risk = _harm_env(1)
+    hp = CAGAHyperparams(harm_gate=True)
+    with pytest.raises(ValueError):
+        caga_round(old, clients, [str(i) for i in range(10)], [1.0] * 10, BLOCK_MAP, loss_fn, hp, 1)
+    with pytest.raises(ValueError):
+        caga_round(old, clients, [str(i) for i in range(10)], [1.0] * 10, BLOCK_MAP, loss_fn,
+                   CAGAHyperparams(harm_gate=True, harm_mode="pairs"), 1, score_fn=score_fn, probe_risk=risk)

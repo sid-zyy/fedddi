@@ -30,6 +30,16 @@ METHODS = {
     "caga_rep": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-reputation"],
     "caga_rep3": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-reputation", "--caga-rep-threshold", "3"],
     "caga_class_rep": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-class-aware", "--caga-reputation"],
+    # Calibrated eligibility (fixes false alarms on honest non-IID clients): outlier gate, plus warm-up baseline.
+    "caga_out": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-outlier"],
+    "caga_cal": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-outlier", "--caga-baseline"],
+    # Harm-gated CAGA (Paper A, step 5): risk-stratified secret probe (half high-risk), CCH tolerance 0.01.
+    # "loo" is the plan's leave-one-out CCH; "solo" judges each client's own model (not masked by other
+    # attackers) and calibrates it like caga_cal, so honest specialists' steady offset does not count.
+    "caga_harm": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-harm-gate", "--caga-harm-mode", "loo",
+                  "--caga-secret-probe"],
+    "caga_harm_solo": ["--method", "caga_noblock", "--caga-warmup", "5", "--caga-harm-gate", "--caga-harm-mode", "solo",
+                       "--caga-secret-probe", "--caga-outlier", "--caga-baseline"],
     # Paper A baselines (step 4); LFR, ERR and Zeno use CAGA's clean probe.
     "lfr": ["--method", "lfr"],
     "err": ["--method", "err"],
@@ -38,6 +48,15 @@ METHODS = {
     "median": ["--method", "median"],
     "trimmed": ["--method", "trimmed"],
 }
+# Step 6 grid (Paper A): harm tolerance x high-risk share of the probe, for both harm modes. Names avoid dots
+# so summarize_variants.py can parse them: t005 = 0.005, h3 = 0.3.
+HARM_GRID = [(tol, hf) for tol in ("0.005", "0.01", "0.02") for hf in ("0.3", "0.5")]
+for _mode in ("loo", "solo"):
+    for _tol, _hf in HARM_GRID:
+        METHODS[f"harm_{_mode}_t{_tol.replace('0.', '')}_h{_hf.replace('0.', '')}"] = (
+            METHODS["caga_harm" if _mode == "loo" else "caga_harm_solo"]
+            + ["--caga-harm-tol", _tol, "--caga-probe-high-frac", _hf])
+
 ATTACKS = {
     "moderate": ["--cond", "joint"],
     "testA": ["--cond", "joint", "--poison-strength", "strong", "--extra-poisoned", "4", "5", "--no-boost"],

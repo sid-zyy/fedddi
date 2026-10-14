@@ -60,6 +60,30 @@ class CAGAHyperparams:
     reputation: bool = False
     rep_beta: float = 0.7
     rep_threshold: float = 1.0
+    # Calibrated eligibility (fixes CAGA's false alarms on honest non-IID clients). The paired test
+    # above asks whether removing a client helps the probe *with certainty*; with thousands of probe
+    # samples any real difference passes, so honest clients whose drug mix differs from the probe's are
+    # gated round after round. With `outlier_gate`, each round every client's leave-one-out effect
+    # (mean probe-loss drop when it is removed) is turned into a robust z-score across the clients,
+    # (effect - median) / (1.4826 * MAD), and only clients scoring above `outlier_k` may be shrunk or
+    # dropped. With `baseline_gate` as well, each client's mean score over the warm-up rounds (when no
+    # attack is assumed, as for warm-up itself) is subtracted first, so a specialist's steady offset
+    # does not count; the baseline is frozen after warm-up so a slowly turning attacker cannot drag it up.
+    outlier_gate: bool = False
+    outlier_k: float = 3.0
+    baseline_gate: bool = False
+    # Harm gate (Paper A): a client may be shrunk or dropped only when its Counterfactual Clinical Harm
+    # on the probe's high-risk positives exceeds `harm_tol` * (number of high-risk probe positives), and
+    # moves and the final step size are judged on a risk-weighted loss (`risk_weights` for low, moderate,
+    # high). `harm_mode` "loo": CCH of including the client (aggregate with vs. without it), as defined in
+    # the plan; "solo": the client's own model against the full aggregate, which other attackers cannot
+    # mask. With `outlier_gate` too, the robust outlier score (and baseline) is computed on the harm
+    # values instead of the probe-loss effect. Needs `score_fn` and `probe_risk` in caga_round.
+    harm_gate: bool = False
+    harm_tol: float = 0.01
+    harm_mode: str = "loo"
+    harm_lambda: float = 0.5
+    risk_weights: Tuple[float, float, float] = (1.0, 2.0, 3.0)
 
 
 @dataclass
@@ -72,6 +96,8 @@ class CAGAClientReport:
     verdict: str
     loo_z: float = 0.0
     reputation: float = 0.0
+    outlier: float = 0.0
+    cch: float = 0.0
 
 
 @dataclass
@@ -96,6 +122,8 @@ class CAGAReport:
             "caga_final_gamma": round(self.final_gamma, 4),
             "caga_loo_z": json.dumps([round(c.loo_z, 3) for c in self.clients]),
             "caga_reputation": json.dumps([round(c.reputation, 3) for c in self.clients]),
+            "caga_outlier": json.dumps([round(c.outlier, 3) for c in self.clients]),
+            "caga_cch": json.dumps([round(c.cch, 2) for c in self.clients]),
         }
 
 
@@ -139,6 +167,62 @@ def select_largest_within_noise(
     return best
 
 
+def robust_scores(x: np.ndarray) -> np.ndarray:
+    """(x - median) / (1.4826 * MAD): a z-score that a minority of outliers cannot inflate. When the MAD
+    is zero (most values equal), 1% of the largest |x| (or 1e-12) stands in for it."""
+    x = np.asarray(x, dtype=np.float64)
+    med = float(np.median(x))
+    mad = 1.4826 * float(np.median(np.abs(x - med)))
+    scale = mad if mad > 0 else max(0.01 * float(np.max(np.abs(x))), 1e-12)
+    return (x - med) / scale
+
+
+def _safety_metrics():
+    """safety_metrics.py, loaded by path so this module stays importable without torch."""
+    import importlib.util
+    import os
+    import sys
+
+    mod = sys.modules.get("_caga_safety_metrics")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            "_caga_safety_metrics", os.path.join(os.path.dirname(os.path.abspath(__file__)), "safety_metrics.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sys.modules["_caga_safety_metrics"] = mod
+    return mod
+
+
+def _harm_scores(hp: CAGAHyperparams, old: NDArrays, client_arrays: List[NDArrays], e: List[Dict[str, float]],
+                 all_blocks: List[str], block_map: Dict[str, List[int]], aggregate: Callable,
+                 score_fn: Callable[[NDArrays], np.ndarray], probe_risk: np.ndarray
+                 ) -> Tuple[List[float], np.ndarray]:
+    """Per-client CCH on the probe, and the per-positive risk weights. The threshold is the full
+    aggregate's 95%-specificity threshold on the probe negatives, used for every comparison."""
+    sm = _safety_metrics()
+    cch, threshold_at_specificity = sm.cch, sm.threshold_at_specificity
+
+    n_pos = probe_risk.size
+    full = _combine(old, aggregate(e), block_map, {b: 1.0 for b in all_blocks})
+    z_full = score_fn(full)
+    t = threshold_at_specificity(z_full[n_pos:], 0.95)
+    harm = []
+    for i in range(len(client_arrays)):
+        if hp.harm_mode == "solo":
+            z_i = score_fn(client_arrays[i])
+            # Harm of the client's own model relative to the federation's: what it alone would hide.
+            harm.append(cch(z_i[:n_pos], z_full[:n_pos], probe_risk, z_i[n_pos:], z_full[n_pos:], t, hp.harm_lambda))
+        elif hp.harm_mode == "loo":
+            drop = [dict(d) for d in e]
+            drop[i] = {b: 0.0 for b in all_blocks}
+            z_wo = score_fn(_combine(old, aggregate(drop), block_map, {b: 1.0 for b in all_blocks}))
+            harm.append(cch(z_full[:n_pos], z_wo[:n_pos], probe_risk, z_full[n_pos:], z_wo[n_pos:], t, hp.harm_lambda))
+        else:
+            raise ValueError(f"unknown harm_mode {hp.harm_mode!r}")
+    w = np.asarray(hp.risk_weights, dtype=np.float64)[probe_risk.astype(np.int64)]
+    return harm, w
+
+
 def _paired_z(d: np.ndarray, w: Optional[np.ndarray] = None) -> Tuple[float, float]:
     """Mean and standard error of a paired difference, optionally weighted per sample (the
     standard error then uses Kish's effective sample size)."""
@@ -169,9 +253,13 @@ def caga_round(
     server_round: int = 0,
     sample_weights: Optional[List[Optional[np.ndarray]]] = None,
     state: Optional[Dict[str, Any]] = None,
+    score_fn: Optional[Callable[[NDArrays], np.ndarray]] = None,
+    probe_risk: Optional[np.ndarray] = None,
 ) -> Tuple[NDArrays, CAGAReport]:
     """One CAGA aggregation. `sample_weights[i]` (one weight per probe sample) is used when
-    `hp.class_aware`; `state` carries the reputation averages between rounds when `hp.reputation`."""
+    `hp.class_aware`; `state` carries the reputation averages and outlier baselines between rounds.
+    With `hp.harm_gate`, `score_fn(arrays)` returns the probe logits (the positives first, in the order
+    of `probe_risk`, then the negatives) and `probe_risk` is the risk code (0, 1, 2) of each positive."""
     n = len(client_arrays)
     all_blocks = list(block_map.keys())
     base_loss_vec = loss_fn(old_arrays)
@@ -215,6 +303,41 @@ def caga_round(
             book[client_keys[i]] = loo_z[i] if prev is None else hp.rep_beta * prev + (1 - hp.rep_beta) * loo_z[i]
             rep_now[i] = book[client_keys[i]]
             eligible[i] = rep_now[i] > hp.rep_threshold
+
+    harm = [0.0] * n
+    risk_w = None
+    if hp.harm_gate:
+        if score_fn is None or probe_risk is None:
+            raise ValueError("hp.harm_gate needs score_fn and probe_risk")
+        harm, risk_w = _harm_scores(hp, old_arrays, client_arrays, e, all_blocks, block_map, aggregate,
+                                    score_fn, np.asarray(probe_risk))
+        n_high = int((np.asarray(probe_risk) == 2).sum())
+        for i in range(n):
+            eligible[i] = eligible[i] and harm[i] > hp.harm_tol * n_high
+        wts = [risk_w] * n
+
+    outlier = [0.0] * n
+    if hp.outlier_gate:
+        if hp.harm_gate:
+            effect = np.asarray(harm, dtype=np.float64)
+        else:
+            effect = np.empty(n)
+            for i in range(n):
+                drop = [dict(d) for d in e]
+                drop[i] = {b: 0.0 for b in all_blocks}
+                effect[i] = float((cur - loss_of(drop)).mean())  # > 0: removing client i helps the probe
+        outlier = robust_scores(effect).tolist()
+        if hp.baseline_gate:
+            if state is None:
+                raise ValueError("hp.baseline_gate needs a `state` dict that persists across rounds")
+            book = state.setdefault("outlier_baseline", {})
+            for i in range(n):
+                tot, cnt = book.get(client_keys[i], (0.0, 0))
+                if warm:
+                    book[client_keys[i]] = (tot + outlier[i], cnt + 1)
+                outlier[i] -= tot / cnt if cnt else 0.0
+        for i in range(n):
+            eligible[i] = eligible[i] and outlier[i] > hp.outlier_k
 
     def try_moves(moves: List[List[Dict[str, float]]], w: Optional[np.ndarray] = None) -> bool:
         """Evaluate candidate scale-states; adopt the best one iff it is significantly better than
@@ -276,6 +399,10 @@ def caga_round(
             if g == 0.0:
                 continue
             gl[g] = cur if g == 1.0 else loss_fn(_combine(old_arrays, agg, block_map, {b: g for b in all_blocks}))
+        if risk_w is not None:
+            # Judge the step size on the risk-weighted loss (weighted mean = plain mean of rescaled losses).
+            scale = risk_w / risk_w.mean()
+            gl = {g: v * scale for g, v in gl.items()}
         if check:
             # tol_rel sets how large a gating improvement must be; it must not loosen this check,
             # because min_gain grows with the damage done by the round's aggregate.
@@ -305,6 +432,7 @@ def caga_round(
             client_key=client_keys[i], n_examples=int(client_weights[i]),
             alpha=alpha, block_scale={b: (s_block[b] / alpha if alpha > 0 else 0.0) for b in all_blocks},
             loss_delta=after_mean - base_mean, verdict=verdict, loo_z=loo_z[i], reputation=rep_now[i],
+            outlier=outlier[i], cch=harm[i],
         ))
 
     report = CAGAReport(server_round=server_round, clients=reports,

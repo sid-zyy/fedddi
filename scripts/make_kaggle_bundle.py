@@ -32,6 +32,11 @@ COPY_DB = bash("DB=$(find /kaggle/input -name drugbank_ddi.pt | head -1)",
                "[ -n \"$DB\" ] || { echo 'drugbank_ddi.pt not found: attach your private DrugBank dataset'; exit 1; }",
                "mkdir -p /kaggle/working/fedddi/data/drugbank && cp \"$DB\" /kaggle/working/fedddi/data/drugbank/",
                "echo \"copied $DB\"")
+CHECK_RISK = code(NL.join([
+    "import torch",
+    "b = torch.load('/kaggle/working/fedddi/data/drugbank/drugbank_ddi.pt', weights_only=False)",
+    "assert 'edge_risk' in b, 'drugbank_ddi.pt has no risk labels: upload the file rebuilt with prepare_drugbank.py --risk-only'",
+    "print('risk labels present; high-risk share', float((b['edge_risk'] == 2).float().mean()))"]))
 PIP = 'pip install -q torch-geometric ogb "flwr[simulation]>=1.10" hydra-core omegaconf'
 PACK = code(NL.join(["import shutil", "shutil.make_archive('/kaggle/working/results', 'zip', '/kaggle/working/results')",
                      "print('Download results.zip from the Output tab')"]))
@@ -100,6 +105,40 @@ nbs = {
              "--device cuda --parallel 3 --out /kaggle/working/results/confirm_ogbl"),
         md("## 4. Summary table"),
         code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/confirm_ogbl"),
+        md("## 5. Package results"), PACK],
+    'fedddi_paperA_tune_baselines.ipynb': [
+        md("# FedDDI-CAGA Paper A, step 6a: baselines under safety-critical attacks (DrugBank, GPU)" + NL + NL + HEAD + NL + NL
+           + PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels** (built with "
+           "`scripts/prepare_drugbank.py --risk-only`); the notebook stops if the labels are missing." + NL + NL +
+           "90 runs on tuning seeds 10 and 11: FedAvg, norm clipping, FLTrust, LFR, Zeno, coordinate median, CAGA and "
+           "calibrated CAGA under hideHigh, hideHigh4, fabHigh, moderate and test B. About 3 to 4 hours. If the session "
+           "stops, run it again: finished runs are skipped."),
+        md("## 1. Copy the code and the DrugBank file"), COPY, COPY_DB, CHECK_RISK,
+        md("## 2. Install packages"), bash(PIP),
+        md("## 3. Runs (live progress below)"),
+        code("!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset drugbank --seeds 10 11 "
+             "--methods fedavg normclip fltrust lfr zeno median caga caga_cal "
+             "--attacks hideHigh hideHigh4 fabHigh moderate testB "
+             "--device cuda --parallel 3 --out /kaggle/working/results/paperA_tune"),
+        md("## 4. Summary table"),
+        code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_tune"),
+        md("## 5. Package results"), PACK],
+    'fedddi_paperA_tune_harm.ipynb': [
+        md("# FedDDI-CAGA Paper A, step 6b: harm-gated CAGA grid (DrugBank, GPU)" + NL + NL + HEAD + NL + NL + PRIVATE
+           + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL +
+           "120 runs on tuning seeds 10 and 11: harm-gated CAGA in two modes (leave-one-out and calibrated solo) x "
+           "harm tolerance 0.005 / 0.01 / 0.02 x high-risk probe share 0.3 / 0.5, under hideHigh, hideHigh4, fabHigh, "
+           "moderate and test B. About 6 to 8 hours; if the 12-hour limit stops it, run it again: finished runs are skipped."),
+        md("## 1. Copy the code and the DrugBank file"), COPY, COPY_DB, CHECK_RISK,
+        md("## 2. Install packages"), bash(PIP),
+        md("## 3. Runs (live progress below)"),
+        code("!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset drugbank --seeds 10 11 "
+             "--methods " + " ".join(f"harm_{m}_t{t.replace('0.', '')}_h{h.replace('0.', '')}" for m in ("loo", "solo")
+                                     for t in ("0.005", "0.01", "0.02") for h in ("0.3", "0.5")) + " "
+             "--attacks hideHigh hideHigh4 fabHigh moderate testB "
+             "--device cuda --parallel 3 --out /kaggle/working/results/paperA_tune_harm"),
+        md("## 4. Summary table"),
+        code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_tune_harm"),
         md("## 5. Package results"), PACK],
 }
 for name, cells in nbs.items():
