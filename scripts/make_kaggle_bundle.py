@@ -227,7 +227,7 @@ for key, title, dataset, split, blocks, hours in MAIN:
     cells = [md(f"# FedDDI-CAGA Paper A, step 7 ({key[:2]} of 08): {title}" + NL + NL + HEAD + NL + NL
                 + ((PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL) if db else "")
                 + f"Main results on fresh seeds 12 to 16 (never used before), frozen settings. {n_runs} runs, about "
-                f"{hours} hours. If the session stops, run it again: finished runs are skipped."),
+                f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
@@ -237,14 +237,22 @@ for key, title, dataset, split, blocks, hours in MAIN:
         cells += [md("## 2. Install and download ogbl-ddi (~5 min)"), stage('setup'),
                   bash("cd /kaggle/working/fedddi", "grep -q model_attack scripts/cpu_pilot.py || "
                        "{ echo 'old fedddi_code.zip: upload the latest one'; exit 1; }")]
-    cells.append(md("## 3. Runs (live progress below)"))
+    cells.append(md("## 3. Resume: copy runs from an earlier session, if attached" + NL + NL +
+                    "If a previous run of this notebook was cut off, open it, use **Add Input → Notebook Output** to attach "
+                    "that version's output here, and run again: its finished runs are copied in and skipped. Without "
+                    "such an input this cell does nothing."))
+    cells.append(bash(f"mkdir -p {out}",
+                      f"for d in $(find /kaggle/input -type d -name 'main_{key}' 2>/dev/null); do "
+                      f"echo \"resuming from $d\"; cp -rn \"$d\"/. {out}/; done",
+                      f"echo \"$(ls {out} | grep -c seed) run folders present\""))
+    cells.append(md("## 4. Runs (live progress below)"))
     for methods, attacks in blocks:
         cells.append(code(f"!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset {dataset} "
                           f"--split {split} --seeds 12 13 14 15 16 --methods {methods} --attacks {attacks} "
                           f"--device cuda --parallel 3 --out {out}"))
-    cells += [md("## 4. Summary table"),
+    cells += [md("## 5. Summary table"),
               code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
-              md("## 5. Package results"), PACK]
+              md("## 6. Package results"), PACK]
     nbs[f"fedddi_main_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():
