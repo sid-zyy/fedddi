@@ -209,6 +209,14 @@ class PoisonEvent:
     update_scale: float = 1.0
     hide_risk: float = 0.0
     fabricate_high: float = 0.0
+    # On-off attacker: inclusive (first, last) round windows in which the attack runs; outside them the
+    # client behaves honestly. None means always on from start_round.
+    active: Optional[List[Tuple[int, int]]] = None
+
+    def is_active(self, server_round: int) -> bool:
+        if server_round < self.start_round:
+            return False
+        return self.active is None or any(a <= server_round <= b for a, b in self.active)
 
 
 def build_poison_events_from_fraction(
@@ -346,7 +354,7 @@ class PoisoningSimulator:
             )
 
             event = self._events_by_client.get(cid)
-            if event is None or server_round < event.start_round:
+            if event is None or not event.is_active(server_round):
                 datasets.append(
                     LocalObservationDataset(
                         client_id=cid,
@@ -399,7 +407,7 @@ class PoisoningSimulator:
         (1.0 for honest clients / inactive attacks)
         """
         event = self._events_by_client.get(client_id)
-        if event is None or server_round < event.start_round:
+        if event is None or not event.is_active(server_round):
             return 1.0
         return float(event.update_scale)
 

@@ -96,6 +96,19 @@ ATTACKS = {
     "hide1": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--poisoned-count", "1"],
     "hide6": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5", "6", "7"],
     "lie1": ["--cond", "drift", "--lie-clients", "0"],
+    # Step 7 model-poisoning attacks: clients 0, 1, 4 and 5 (as in test B), severe drift on 2 and 3.
+    **{k: ["--cond", "drift", "--model-attack", k, "--model-attack-clients", "0", "1", "4", "5"]
+       for k in ("signflip", "gauss", "ipm", "minmax", "minsum")},
+    # Step 8: malicious majority with A Little Is Enough (fixed z = 0.84, test B's value for 4 attackers; the
+    # attack's own formula is undefined for a majority), the on-off hider, and adaptive hiders that keep their
+    # estimated harm under the harm-reputation limit, estimated on their own data or on the server's probe
+    # (the latter only against a defense without a secret probe).
+    "lie6": ["--cond", "drift", "--lie-clients", "0", "1", "4", "5", "6", "7", "--lie-z", "0.84"],
+    "onoff4": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5",
+               "--on-off", "12-20,30-40"],
+    "adaptive4": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5", "--adaptive-hide"],
+    "adaptive4p": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5", "--adaptive-hide",
+                   "--adaptive-knows-probe"],
 }
 
 

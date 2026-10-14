@@ -33,7 +33,7 @@ from src.data.data_drift import DataDriftSimulator, FeatureDriftEvent  # noqa: E
 from src.data.dataset import get_edge_split, load_dataset  # noqa: E402
 from src.data.features import compute_fixed_global_features  # noqa: E402
 from src.data.local_observations import generate_client_observations  # noqa: E402
-from src.data.poisoning import PoisonEvent, PoisoningSimulator  # noqa: E402
+from src.data.poisoning import PoisonEvent, PoisoningSimulator, RiskIndex  # noqa: E402
 from src.training.caga import CAGAHyperparams, caga_round, make_probe_loss_fn  # noqa: E402
 from src.training.caga_probe import (  # noqa: E402
     compute_block_index_map, probe_seed, sample_probe_edges, sample_risk_probe)
@@ -46,6 +46,7 @@ from src.training.robust_aggregation import (  # noqa: E402
     clip_and_average, err_aggregate, krum_aggregate, lfr_aggregate, median_aggregate, probe_auroc_error,
     trimmed_mean_aggregate, zeno_aggregate)
 from src.training import safety_metrics as sm  # noqa: E402
+from src.training.model_attacks import ATTACKS as MODEL_ATTACKS, apply_model_attack  # noqa: E402
 from src.training.trainer import build_client_trainer  # noqa: E402
 from src.utils.utils import seed_everything  # noqa: E402
 
@@ -87,6 +88,21 @@ def parse_args() -> argparse.Namespace:
                    help="Clients running the 'A Little Is Enough' attack from --attack-start onwards.")
     p.add_argument("--lie-z", type=float, default=None,
                    help="Override the attack's z (default: the paper's value for the number of attackers).")
+    p.add_argument("--model-attack", choices=MODEL_ATTACKS, default=None,
+                   help="Replace --model-attack-clients' updates from --attack-start on (step 7 attacks).")
+    p.add_argument("--model-attack-clients", type=int, nargs="*", default=[])
+    p.add_argument("--ipm-eps", type=float, default=0.5)
+    p.add_argument("--gauss-scale", type=float, default=1.0)
+    p.add_argument("--on-off", default=None,
+                   help="Poisoned clients attack only in these rounds, e.g. '12-20,30-40' (on-off attacker).")
+    p.add_argument("--adaptive-hide", action="store_true",
+                   help="Adaptive hiders: each round, blend the hiding update with the honest mean as far as their "
+                        "estimated harm stays under the harm-reputation gate's limit.")
+    p.add_argument("--adaptive-margin", type=float, default=0.9,
+                   help="Adaptive hiders aim at this fraction of the estimated limit.")
+    p.add_argument("--adaptive-knows-probe", action="store_true",
+                   help="Adaptive hiders estimate harm on the server's probe of the round (only possible without a "
+                        "secret probe); otherwise on their own high-risk pairs.")
     p.add_argument("--hide-high", type=float, default=0.0,
                    help="Poisoned clients drop this share of their own high-risk positives (DrugBank); "
                         "replaces the class-based suppress/emerge attack.")
@@ -185,11 +201,15 @@ def build_events(a: argparse.Namespace, num_features: int = 50):
             poison.append(PoisonEvent(client_id=cid, start_round=src.start_round, suppress=dict(src.suppress),
                                       emerge=dict(src.emerge), kind=src.kind, transition_rounds=src.transition_rounds,
                                       update_scale=src.update_scale, hide_risk=src.hide_risk,
-                                      fabricate_high=src.fabricate_high))
+                                      fabricate_high=src.fabricate_high, active=src.active))
             taken.add(cid)
         if a.no_boost:
             for e in poison:
                 e.update_scale = 1.0
+        if a.on_off:
+            windows = [tuple(int(x) for x in w.split("-")) for w in a.on_off.split(",")]
+            for e in poison:
+                e.active = windows
     drift = [FeatureDriftEvent(client_id=s["client_id"], start_round=s["start_round"], feature_dims=s["feature_dims"],
                                shift_magnitude=s["shift_magnitude"], noise_std=s["noise_std"],
                                target_node_frac=s["target_node_frac"], node_selection=s["node_selection"],
@@ -243,6 +263,36 @@ def safety_fields(prefix: str, pos: torch.Tensor, risk: torch.Tensor, t: float) 
     out[f"{prefix}_mdir_high"] = sm.mdir(pos, risk, t)
     out[f"{prefix}_risk_weighted_recall"] = sm.risk_weighted_recall(pos, risk, t)
     return out
+
+
+def adaptive_hide(params: List[np.ndarray], client_arrays: List[List[np.ndarray]], attackers: List[int],
+                  others: List[int], score_pairs, margin: float, delta: float) -> "tuple[List[float], float]":
+    """Adaptive hiders against the harm-reputation gate. The attackers see the honest updates (omniscient,
+    like A Little Is Enough) and score models on an estimation set (`score_pairs(arrays)` -> positive and
+    negative scores; the positives are high-risk pairs). Each attacker sends honest_mean + alpha * (its hiding
+    update - honest_mean) with the largest alpha in {1, 0.75, 0.5, 0.25, 0} whose estimated harm (CCH against
+    the honest mean, at the honest mean's 95%-specificity threshold) stays under margin * (1 + delta) times
+    the median honest client's estimated harm. Returns the alphas and that budget."""
+    mean_h = [np.mean([client_arrays[k][i] for k in others], axis=0) for i in range(len(params))]
+    zp_h, zn_h = score_pairs(mean_h)
+    t = sm.threshold_at_specificity(zn_h, 0.95)
+    hi = np.full(len(zp_h), 2)
+
+    def harm(arrays):
+        zp, zn = score_pairs(arrays)
+        return sm.cch(zp, zp_h, hi, zn, zn_h, t)
+
+    budget = margin * (1.0 + delta) * float(np.median([harm(client_arrays[k]) for k in others]))
+    alphas = []
+    for k in attackers:
+        x = client_arrays[k]
+        for al in (1.0, 0.75, 0.5, 0.25, 0.0):
+            cand = [(h + al * (xi - h)).astype(xi.dtype) for h, xi in zip(mean_h, x)]
+            if al == 0.0 or harm(cand) <= budget:
+                break
+        client_arrays[k] = cand
+        alphas.append(al)
+    return alphas, budget
 
 
 def mean_over(reports: List[Dict[str, Any]], key: str) -> Optional[float]:
@@ -319,7 +369,15 @@ def main() -> None:
                             device=device, num_rounds=a.rounds, round_lr_decay=a.round_lr_decay, c_id_int=i, poisoning_simulator=poison_sim,
                             data_drift_simulator=drift_sim) for i in range(a.num_clients)]
     special = sorted({e.client_id for e in poison_events} | {e.client_id for e in drift_events})
-    n_attackers = len({e.client_id for e in poison_events} | set(a.lie_clients))
+    n_attackers = len({e.client_id for e in poison_events} | set(a.lie_clients) | set(a.model_attack_clients))
+    if a.model_attack and not a.model_attack_clients:
+        raise SystemExit("--model-attack needs --model-attack-clients")
+    if a.adaptive_hide and not a.hide_high:
+        raise SystemExit("--adaptive-hide needs --hide-high")
+    if a.adaptive_knows_probe and a.caga_secret_probe:
+        raise SystemExit("--adaptive-knows-probe contradicts --caga-secret-probe: a secret probe is unknown to clients")
+    attack_rng = np.random.default_rng(a.seed + 7)
+    risk_index = RiskIndex(edge_risk) if a.adaptive_hide else None
     byz_c = a.byz_c if a.byz_c is not None else (n_attackers or 2)
     cch_anchor = None
     if a.log_cch:
@@ -365,6 +423,9 @@ def main() -> None:
         client_arrays = [list(f[0]) for f in fits]
         if a.lie_clients and rnd >= a.attack_start:
             lie_updates(params, client_arrays, a.lie_clients, a.num_clients, a.lie_z)
+        if a.model_attack and rnd >= a.attack_start:
+            apply_model_attack(a.model_attack, params, client_arrays, a.model_attack_clients, attack_rng,
+                               eps=a.ipm_eps, scale=a.gauss_scale)
         weights = [float(f[1]) for f in fits]
         row: Dict[str, Any] = {"round": rnd, "train_loss": float(np.mean([f[2]["loss"] for f in fits])),
                                "client_losses": json.dumps([round(float(f[2]["loss"]), 4) for f in fits])}
@@ -392,6 +453,34 @@ def main() -> None:
             if a.caga_class_aware and atc_mapping is not None:
                 cls = atc_mapping[probe[: probe.size(0) // 2, 0].cpu()].numpy()
                 sw = [np.array([m.get(int(k), 0.0) for k in cls]) for m in mixtures]
+
+        hiders = [e.client_id for e in poison_events if a.adaptive_hide and e.is_active(rnd) and e.hide_risk > 0]
+        if hiders:
+            if a.adaptive_knows_probe and probe_risk is not None:
+                n_pos = probe.size(0) // 2
+                est_pos, est_neg = probe[:n_pos][torch.from_numpy(probe_risk == 2).to(probe.device)], probe[n_pos:]
+            else:
+                # Colluding hiders pool their own high-risk pairs (kept and hidden) and draw random pairs.
+                own = torch.cat([torch.cat([clients[k].trainer.split["train"]["edge"].cpu(),
+                                            (clients[k].poison_suppressed_edges if clients[k].poison_suppressed_edges
+                                             is not None else torch.empty(0, 2, dtype=torch.long)).cpu()])
+                                 for k in hiders])
+                est_pos = own[torch.from_numpy(risk_index.risk_of(own) == 2)]
+                g = torch.Generator().manual_seed(a.seed * 7919 + rnd)
+                est_neg = torch.randint(0, num_nodes, (2000, 2), generator=g)
+                est_neg = est_neg[est_neg[:, 0] != est_neg[:, 1]]
+
+            def score_pairs(arrays, _p=est_pos, _n=est_neg):
+                eval_client.set_parameters(arrays)
+                zp, zn = score_model(eval_trainer, graph, [_p, _n], a.batch_size, device)
+                return zp.numpy(), zn.numpy()
+
+            others = [k for k in range(a.num_clients)
+                      if k not in hiders and k not in a.lie_clients and k not in a.model_attack_clients]
+            alphas, budget = adaptive_hide(params, client_arrays, hiders, others, score_pairs, a.adaptive_margin,
+                                           a.caga_harm_rep_delta)
+            row["adaptive_alpha"] = json.dumps(alphas)
+            row["adaptive_budget"] = round(budget, 2)
 
         def aggregate(idx: List[int], state: Dict[str, Any]):
             """The method's aggregate of clients `idx`: (new arrays, row fields, excluded flag per client)."""

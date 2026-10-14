@@ -268,3 +268,14 @@ class TestSafetyCriticalAttacks:
         with pytest.raises(ValueError):
             PoisoningSimulator(initial_datasets, train_edges, atc_mapping,
                                events=[PoisonEvent(client_id=0, start_round=0, hide_risk=0.5)])
+
+
+def test_on_off_attacker_is_honest_outside_its_windows(train_edges, atc_mapping, initial_datasets):
+    from src.data.poisoning import RiskIndex
+    lut = _risk_lookup(train_edges)
+    ev = PoisonEvent(client_id=0, start_round=2, hide_risk=0.8, update_scale=3.0, active=[(2, 3), (6, 6)])
+    sim = PoisoningSimulator(initial_datasets, train_edges, atc_mapping, events=[ev], seed=0, edge_risk=lut)
+    on = {r: sim.step(r)[0].false_negative_edges.numel() > 0 for r in range(1, 8)}
+    assert on == {1: False, 2: True, 3: True, 4: False, 5: False, 6: True, 7: False}
+    assert [sim.update_scale(0, r) for r in (3, 4, 6)] == [3.0, 1.0, 3.0]
+    assert PoisonEvent(client_id=1, start_round=5).is_active(9) and not PoisonEvent(client_id=1, start_round=5).is_active(4)

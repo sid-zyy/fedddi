@@ -42,6 +42,9 @@ GROUPS = {"moderate": {0: _P, 1: _P, 2: _D, 3: _D},
           "hide1": {0: _P, 2: _D, 3: _D},
           "hide6": {0: _P, 1: _P, 4: _P, 5: _P, 6: _P, 7: _P, 2: _D, 3: _D},
           "lie1": {0: _P, 2: _D, 3: _D},
+          **{k: {0: _P, 1: _P, 4: _P, 5: _P, 2: _D, 3: _D}
+             for k in ("signflip", "gauss", "ipm", "minmax", "minsum", "onoff4", "adaptive4", "adaptive4p")},
+          "lie6": {0: _P, 1: _P, 4: _P, 5: _P, 6: _P, 7: _P, 2: _D, 3: _D},
           "clean": {}}
 WINDOW_COLS = ("val_auroc", "test_auroc", "val_aupr", "test_aupr", "val_hits20", "test_hits20",
                "poison_fabricated_mean_prob", "poison_suppressed_mean_prob", "threshold",
