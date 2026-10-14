@@ -2,9 +2,55 @@
 
 The plan for turning FedDDI-CAGA into a journal paper. Tick items off as they are done, and record decisions here so co-authors share one picture.
 
-Last updated: 2026-10-12.
+Last updated: 2026-10-14.
+
+## Current verdict and outlook (2026-10-14)
+
+**Provisional verdict: pursue publication with CAGA as the method, framed around crafted attacks.** It becomes final once the fresh-seed confirmation (seeds 5–7, both datasets) passes the criteria in Phase 2.
+
+**Claim:** CAGA, a clean-probe gating rule for federated drug-interaction prediction, matches state-of-the-art defenses against standard poisoning and drift, and is the only defense tested that resists crafted "A Little Is Enough" attacks. Size- and similarity-based defenses miss them because CAGA judges an update's effect, not its appearance.
+
+**Which defense handles which attack** (ogbl-ddi, held-out seeds 2–4):
+
+| Defense | Large boosted updates (strong poisoning) | Normal-size poisoning (test A) | Crafted normal-looking updates (test B) |
+| --- | --- | --- | --- |
+| Norm clipping | Recovers | Fails (fake-edge belief 0.28, vs. 0.30 undefended) | Fails |
+| FLTrust | Recovers | Stops it (0.20) | Fails (0.061 Hits@20, no better than FedAvg) |
+| **CAGA** | Recovers | Stops it, slightly better on targets (0.18) | **Holds (0.097, every seed)** |
+
+**For it:** the test-B win was on every held-out seed, with a large effect (+0.036 Hits@20, about 60% relative) and a mechanism that explains it. DrugBank pointed the same way (+0.015 AUROC on one tuning seed, a tie on the other). CAGA does not lose elsewhere. The setup is publishable: two datasets, a centralized ceiling, separate tuning and reporting seeds, and pre-registered criteria.
+
+**Against it, or what could still sink it:**
+- The decisive result rests on 3 seeds of one dataset; earlier wins on seeds 0–1 did not replicate.
+- The advantage is narrow: under ordinary attacks CAGA only ties FLTrust, runs slower, and wrongly blocks 13–23% of honest client-rounds.
+- No full-scale CAGA runs and no adaptive-attacker test yet.
+- **Novelty is the biggest risk.** Fang et al.'s loss- and error-based rejection (LFR/ERR, USENIX Security 2020) and Zeno/Zeno++ also judge updates by their effect on server data. **If LFR also resists A Little Is Enough, the method claim stops being new.** These baselines are untested and are the next priority.
+
+**Journal outlook:**
+
+| Venue type | Examples | Fit now | Fit after the checklist |
+| --- | --- | --- | --- |
+| Biomedical / health informatics | IEEE JBHI, Briefings in Bioinformatics, J. Biomedical Informatics | Weak | Good, the natural home |
+| Machine learning | IEEE TNNLS, Neural Networks, Knowledge-Based Systems | Weak | Moderate |
+| Security | IEEE TIFS, TDSC | Not competitive | Hard: needs adaptive attackers, theory, other domains |
+
+Estimate: better-than-even odds that the confirmation passes on at least one dataset. A Q1 biomedical-informatics paper is realistic if it passes **and** CAGA still beats LFR/Zeno on crafted attacks, in roughly 4–8 more weeks. If LFR matches CAGA, the empirical study is still publishable, but probably not at A level.
+
+**A-level checklist:**
+- [ ] Fresh-seed confirmation (seeds 5–7, running on Kaggle), then 5 or more seeds in the final tables.
+- [ ] **Closest baselines: Fang's LFR/ERR and Zeno**, plus Krum, coordinate median, trimmed mean, ideally FLAME.
+- [ ] Adaptive attacker that knows CAGA's rule and stays under its tolerance.
+- [ ] Full-scale GPU tables with the learning-rate decay.
+- [ ] Why it works: an analysis or controlled experiment showing why effect-based checks catch what similarity-based checks miss.
+- [ ] Ablations: warm-up (DrugBank collapses without it), probe size, root fraction, number of attackers, block gating, and the two failed variants.
+- [ ] Cost and limitations: runtime, false-alarm rate, the need for clean server data.
+- [ ] DrugBank cold-drug split.
+
+**Decision points:** confirmation passes on both datasets → method paper. On one → narrower method paper. On neither → empirical study.
 
 ## Thesis
+
+**Refined 2026-10-14: see "Current verdict and outlook" above for the claim now being tested.** The text below is the Option A thesis it grew from.
 
 **One probe-gated aggregation rule protects a federated model from poisoning and feature drift at the same time, without knowing which threat is present.**
 
@@ -276,6 +322,8 @@ Joint condition with severe drift, 2 seeds, test Hits@20 over rounds 31–40:
 | --- | --- | --- |
 | Block gating adds nothing | `caga_noblock` matches CAGA | Simplify the method to whole-client gating and say so; the thesis does not depend on it |
 | CAGA does not beat LFR or FLTrust | Phase 3 paired confidence intervals include zero | Lead with no-threat-model robustness across all four conditions; otherwise reframe |
+| **LFR or Zeno also resists A Little Is Enough** | They match CAGA on test B | The method claim is no longer new: argue combination search and the step-size cap, or switch to the empirical study |
+| The test-B win does not replicate | Seeds 5–7 confirmation fails | Narrow the claim to the dataset where it holds, or switch to the empirical study |
 | Clean-condition gain is mistaken for defense | Reviewers note CAGA also wins with no attack | Report attacked-minus-clean gaps per method alongside raw scores |
 | Adaptive attacks get through | Damage accumulates below tolerance | Report it honestly and bound the damage per round |
 | Training instability masks results | Collapses in clean runs | Phase 1 stability gate |
