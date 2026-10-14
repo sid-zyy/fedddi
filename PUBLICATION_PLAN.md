@@ -287,6 +287,26 @@ Test, criteria fixed before running (CPU, DrugBank random, tuning seeds 10–11,
 
 Figures: an MDIR-vs-AUROC scatter per defense (shows that accuracy hides harm); per-client CCH heatmap over rounds; cumulative MDIR under the adaptive attacker; DRR bars per attack.
 
+**Step 6a result (2026-10-14, Kaggle T4, `results/kaggle_tune_baselines/`, 80 runs, seeds 10–11, validation, last-10-round means).** Run from the earlier zip, so it has `caga_cal` (the stalling version) instead of `caga_cal2` and no `clean` condition; both are in the new `fedddi_paperA_tune_extra.ipynb` (26 runs).
+
+| Method | Val AUROC: fabHigh / hideHigh / hideHigh4 / moderate / testB | Val MDIR: fabHigh / hideHigh / hideHigh4 / moderate / testB | Attackers excluded, hideHigh4 / testB | Honest false exclusion (range) |
+| --- | --- | --- | --- | --- |
+| FedAvg | 0.932 / 0.930 / 0.927 / 0.923 / 0.884 | 0.430 / 0.506 / 0.536 / 0.504 / 0.676 | 0 / 0 | 0 |
+| norm clip | 0.932 / 0.930 / 0.927 / 0.929 / 0.885 | 0.445 / 0.519 / 0.551 / 0.484 / 0.677 | 0.33 / 0 | 0.20–0.85 |
+| FLTrust | **0.938 / 0.938** / 0.934 / **0.938** / 0.907 | **0.410 / 0.443** / 0.499 / **0.424** / 0.579 | 0.08 / 0.05 | 0–0.01 |
+| LFR | 0.937 / 0.934 / 0.930 / 0.934 / **0.916** | 0.412 / 0.500 / 0.533 / 0.458 / **0.536** | 0.26 / 0.68 | 0–0.26 |
+| Zeno | 0.936 / 0.933 / **0.936** / 0.933 / 0.914 | 0.414 / 0.502 / **0.495** / 0.452 / 0.545 | 0.26 / 0.81 | 0–0.26 |
+| median | 0.934 / 0.930 / 0.929 / 0.929 / 0.838 | 0.450 / 0.527 / 0.555 / 0.506 / 0.619 | – | 0 |
+| CAGA | 0.935 / 0.932 / 0.931 / 0.934 / 0.914 | 0.429 / 0.482 / 0.506 / 0.448 / 0.543 | 0.36 / 0.83 | 0.29–0.34 |
+| `caga_cal` (stalls) | 0.932 / 0.928 / 0.922 / 0.927 / 0.902 | 0.442 / 0.509 / 0.560 / 0.491 / 0.605 | 0 / 0 | 0–0.03 |
+
+What it shows:
+- **The novelty risk materialised: LFR and Zeno match CAGA under A Little Is Enough** (CAGA − LFR −0.001 and −0.003, CAGA − Zeno −0.000 and −0.000 on the two seeds), and they exclude the attackers about as often (68–81% vs 83%). With the seeds 5–7 failure, this settles it: CAGA's crafted-attack advantage is not a contribution of Paper A. Effect-based defenses as a family resist A Little Is Enough; FLTrust (similarity-based) does not on ogbl-ddi and is 0.007–0.009 behind here.
+- **FLTrust is the strongest general defense on DrugBank**: best AUROC under four attacks, best MDIR under fabHigh, hideHigh and moderate, and almost no false alarms.
+- **No defense undoes `hideHigh4`.** Best MDIR 0.495 (Zeno) and 0.499 (FLTrust), against about 0.41–0.43 for the same defenses under fabHigh; attackers are excluded in at most 36% of rounds. This is the gap the harm gate has to close, and it supports criterion 2 ("accuracy hides harm"): FLTrust and Zeno keep AUROC at 0.934–0.936 while their MDIR is 0.08–0.09 higher than under fabHigh. **Provisional**: fabHigh is not the clean reference; the clean runs in step 6c decide it.
+- Coordinate median collapses under test B (0.838) and is the worst on MDIR; norm clipping wrongly clips 85% of honest client-rounds under test B.
+- For the step 6 selection rule, harm-gated CAGA must keep validation AUROC ≥ FLTrust − 0.005 under every attack: ≥ 0.933 / 0.933 / 0.929 / 0.933 / 0.902. Plain CAGA misses it by 0.001 under hideHigh.
+
 ### Pass criteria for Paper A (fixed 2026-10-14, before any results)
 
 1. **Premise:** under `hideHigh`, FedAvg's MDIR rises by ≥ 0.05 with an AUROC change < 0.01 (step 3 sanity check). If this fails, the attack is strengthened before anything else.

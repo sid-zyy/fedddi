@@ -123,6 +123,25 @@ nbs = {
         md("## 4. Summary table"),
         code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_tune"),
         md("## 5. Package results"), PACK],
+    'fedddi_paperA_tune_extra.ipynb': [
+        md("# FedDDI-CAGA Paper A, step 6c: clean runs and calibrated CAGA (DrugBank, GPU)" + NL + NL + HEAD + NL + NL
+           + PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL +
+           "26 runs on tuning seeds 10 and 11, completing the step 6a baselines: every method with no attack (the reference "
+           "for MDIR rises, DRR and false alarms), and calibrated CAGA with the cap-only final check (`caga_cal2`) under "
+           "the five attacks. About 1 to 1.5 hours. Finished runs are skipped if you run it again."),
+        md("## 1. Copy the code and the DrugBank file"), COPY, COPY_DB, CHECK_RISK,
+        md("## 2. Install packages"), bash(PIP),
+        md("## 3. Clean runs, every method"),
+        code("!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset drugbank --seeds 10 11 "
+             "--methods fedavg normclip fltrust lfr zeno median caga caga_cal2 --attacks clean "
+             "--device cuda --parallel 3 --out /kaggle/working/results/paperA_tune"),
+        md("## 4. Calibrated CAGA under the five attacks"),
+        code("!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset drugbank --seeds 10 11 "
+             "--methods caga_cal2 --attacks hideHigh hideHigh4 fabHigh moderate testB "
+             "--device cuda --parallel 3 --out /kaggle/working/results/paperA_tune"),
+        md("## 5. Summary table"),
+        code("!cd /kaggle/working/fedddi && python scripts/summarize_variants.py /kaggle/working/results/paperA_tune"),
+        md("## 6. Package results"), PACK],
     'fedddi_paperA_tune_harm.ipynb': [
         md("# FedDDI-CAGA Paper A, step 6b: harm-gated CAGA grid (DrugBank, GPU)" + NL + NL + HEAD + NL + NL + PRIVATE
            + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL +
