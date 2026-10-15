@@ -275,6 +275,22 @@ Test, criteria fixed before running (CPU, DrugBank random, tuning seeds 10–11,
 | 5 | `main_05_db_model_b` | DrugBank random: min-sum, strong, test A, hideHighLIE × 6 | 120 | 4–5 |
 | 6–10 | `main_06_ogbl_clean`, `07_ogbl_strong`, `08_ogbl_testA`, `09_ogbl_testB`, `10_ogbl_minmax` | ogbl-ddi: one attack each × 6 | 30 each | 3–4 each |
 
+**Step 7 result, notebook 6 `main_06_ogbl_clean` (2026-10-15, Kaggle; 30/30 runs, 40 rounds each; git-ignored `results/kaggle_main/main_06_ogbl_clean/`).** Metric: test Hits@20, last-10-round mean, paired over seeds 12–16 with 95% t-intervals (4 df).
+
+| Method | Test Hits@20 | vs FedAvg [95% CI] | vs FLTrust [95% CI] | Not fully accepted (honest) |
+| --- | --- | --- | --- | --- |
+| FedAvg | 0.116 | – | −0.009 | 0 |
+| FLTrust | 0.125 | +0.009 [−0.020, +0.037] | – | 0.02 |
+| LFR | 0.113 | −0.003 [−0.036, +0.030] | −0.012 [−0.024, +0.000] | 0.20 (by design) |
+| norm clip | 0.113 | −0.003 [−0.022, +0.016] | −0.012 [−0.045, +0.022] | 0.50 (by design) |
+| Zeno | 0.108 | −0.008 [−0.035, +0.019] | −0.017 [−0.034, +0.000] | 0.20 (by design) |
+| CAGA | 0.096 | −0.021 [−0.066, +0.025] | −0.029 [−0.066, +0.008] | 0.21 |
+
+- No interval excludes zero: ogbl-ddi Hits@20 is very noisy (validation Hits@20 swings 0.06–0.18 within one run; seed spread 0.06–0.19), so 5 seeds cannot separate differences below about 0.03.
+- **CAGA has the largest no-attack cost**, lower than FedAvg on 4 of 5 seeds; one seed (15: −0.084, CAGA's validation fell from 0.15 to 0.07 in the last rounds while FedAvg rose) carries most of the mean. Median paired difference vs FedAvg −0.013. Same direction as seeds 5–7 (CAGA 0.016 below FLTrust, clean ogbl-ddi), larger here. Its false alarms on ogbl-ddi (21% of honest client-rounds) are lower than on DrugBank (about 50%) but the same order as LFR/Zeno's structural 20% (they drop c = 2 clients every round).
+- "Not fully accepted" for LFR, Zeno and norm clip is fixed by construction (drop c = 2 of 10; clip at the median norm), so only FLTrust and CAGA's rates are informative.
+- **Decision:** reported as is; it is the no-attack cost row for ogbl-ddi. CAGA's no-attack cost goes into the paper's limitations together with the DrugBank false alarms (step 5a). No change to the frozen settings: the remaining notebooks must use the same settings for the comparison to hold.
+
 "9 methods" = FedAvg, norm clip, FLTrust, LFR, Zeno, median, Krum, CAGA, harm reputation δ 0.2; "6" drops median, Krum and harm reputation (secondary attacks and ogbl-ddi, where there are no risk labels). Decisions and reasons: the plan's full matrix (every attack × every method × 5 seeds) would be about 1,200 runs; the secondary attacks and ogbl-ddi use the six methods that matter for the comparison (median and Krum already fail on DrugBank tuning; harm reputation needs risk labels). Total about 40–50 GPU hours, more than one week of Kaggle's free GPU quota (about 30 h/week), so the order above puts the core tables first. A CPU smoke run covered every new combination (cold split with harm reputation and Krum, hideHighLIE, model attacks on ogbl-ddi with LFR and Zeno).
 
 **Step 8: robustness of the defense itself (seeds 12–16, DrugBank).**
