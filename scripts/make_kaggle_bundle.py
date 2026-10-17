@@ -222,29 +222,46 @@ MAIN = [  # (file, title, dataset, split, [(methods, attacks)], hours)
     ("09_ogbl_testB", "ogbl-ddi: A Little Is Enough", "ogbl-ddi", "random", [(SIX, "testB")], "3 to 4"),
     ("10_ogbl_minmax", "ogbl-ddi: min-max", "ogbl-ddi", "random", [(SIX, "minmax")], "3 to 4"),
 ]
-for key, title, dataset, split, blocks, hours in MAIN:
-    out = f"/kaggle/working/results/main_{key}"
+# Step 8 (robustness and CAGA's candidate claims), same seeds and settings; criteria in PUBLICATION_PLAN.md.
+DEF6 = "fedavg fltrust lfr zeno caga harm_rep_d2"
+STEP8 = [
+    ("01_adaptive_onoff", "adaptive hiders and the on-off hider", "drugbank", "random",
+     [(DEF6 + " harm_rep_d2_open", "adaptive4"), ("harm_rep_d2_open", "adaptive4p clean hideHigh4"),
+      (DEF6, "onoff4")], "4 to 5"),
+    ("02_majority", "malicious majority (6 of 10) and under-estimated attacker counts", "drugbank", "random",
+     [(DEF6 + " lfr_c2 zeno_c2 lfr_c4 zeno_c4", "hide6 lie6"), ("lfr_c2 zeno_c2", "hideHigh4 testB"),
+      ("lfr_c4 zeno_c4", "hideHigh")], "5 to 6"),
+    ("03_few", "one and two attackers", "drugbank", "random",
+     [("fedavg fltrust caga lfr zeno lfr_c4 zeno_c4", "hide1 lie1 testB2"), ("lfr_c2 zeno_c2", "hide1 lie1")],
+     "5 to 6"),
+]
+JOBS = [("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
+for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
+    out = f"/kaggle/working/results/{prefix}_{key}"
     n_runs = sum(len(m.split()) * len(a.split()) * 5 for m, a in blocks)
     db = dataset == "drugbank"
-    cells = [md(f"# FedDDI-CAGA Paper A, step 7 ({key[:2]} of 10): {title}" + NL + NL + HEAD + NL + NL
+    cells = [md(f"# FedDDI-CAGA Paper A, step {step} ({key[:2]} of {total}): {title}" + NL + NL + HEAD + NL + NL
                 + ((PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL) if db else "")
-                + f"Main results on fresh seeds 12 to 16 (never used before), frozen settings. {n_runs} runs, about "
+                + ("Main results on fresh seeds 12 to 16 (never used before), frozen settings. " if step == "7" else
+                   "Robustness runs on seeds 12 to 16 with the step 7 settings. ") + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
+    version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
+               else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
-                  bash(PIP, "cd /kaggle/working/fedddi", "grep -q model_attack scripts/cpu_pilot.py || "
+                  bash(PIP, "cd /kaggle/working/fedddi", f"{version} || "
                        "{ echo 'old fedddi_code.zip: upload the latest one'; exit 1; }")]
     else:
         cells += [md("## 2. Install and download ogbl-ddi (~5 min)"), stage('setup'),
-                  bash("cd /kaggle/working/fedddi", "grep -q model_attack scripts/cpu_pilot.py || "
+                  bash("cd /kaggle/working/fedddi", f"{version} || "
                        "{ echo 'old fedddi_code.zip: upload the latest one'; exit 1; }")]
     cells.append(md("## 3. Resume: copy runs from an earlier session, if attached" + NL + NL +
                     "If a previous run of this notebook was cut off, open it, use **Add Input → Notebook Output** to attach "
                     "that version's output here, and run again: its finished runs are copied in and skipped. Without "
                     "such an input this cell does nothing."))
     cells.append(bash(f"mkdir -p {out}",
-                      f"for d in $(find /kaggle/input -type d -name 'main_{key}' 2>/dev/null); do "
+                      f"for d in $(find /kaggle/input -type d -name '{prefix}_{key}' 2>/dev/null); do "
                       f"echo \"resuming from $d\"; cp -rn \"$d\"/. {out}/; done",
                       f"echo \"$(ls {out} | grep -c seed) run folders present\""))
     cells.append(md("## 4. Runs (live progress below)"))
@@ -255,7 +272,7 @@ for key, title, dataset, split, blocks, hours in MAIN:
     cells += [md("## 5. Summary table"),
               code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
               md("## 6. Package results"), PACK]
-    nbs[f"fedddi_main_{key}.ipynb"] = cells
+    nbs[f"fedddi_{'main' if step == '7' else 'step8'}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():
     json.dump({"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},

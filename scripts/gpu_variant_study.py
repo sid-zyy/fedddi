@@ -65,6 +65,8 @@ for _d in ("0.1", "0.2", "0.3"):
         "--method", "caga_noblock", "--caga-warmup", "5", "--caga-harm-gate", "--caga-harm-mode", "solo",
         "--caga-harm-tol", "0", "--caga-secret-probe", "--caga-final-check", "cap",
         "--caga-harm-rep", "--caga-harm-rep-delta", _d]
+# Step 8: the same with a probe the clients can know (no secret re-draw), the target of `adaptive4p`.
+METHODS["harm_rep_d2_open"] = [x for x in METHODS["harm_rep_d2"] if x != "--caga-secret-probe"]
 
 # Step 6 grid (Paper A): harm tolerance x high-risk share of the probe, for both harm modes. Names avoid dots
 # so summarize_variants.py can parse them: t005 = 0.005, h3 = 0.3.

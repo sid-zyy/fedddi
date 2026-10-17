@@ -348,6 +348,23 @@ Implemented 2026-10-14 (tests: `tests/test_adaptive_attacker.py`, `tests/test_po
 2. Malicious majority: 6 of 10 clients hide high-risk pairs.
 3. On-off attacker: attacks in rounds 12–20 and 30–40 only.
 
+**Step 8 notebooks (built 2026-10-17; `results/kaggle/fedddi_step8_*.ipynb`, 335 runs, seeds 12–16, DrugBank random, step 7 settings).** Every reference run with identical settings (clean, hideHigh, hideHigh4, testB with FedAvg, FLTrust, LFR, Zeno, CAGA, harm reputation) is reused from step 7, not re-run. New method `harm_rep_d2_open` = harm reputation δ 0.2 with a probe the clients can know (no secret re-draw), the only defense `adaptive4p` can target; it gets clean and hideHigh4 references.
+
+| # | Notebook | Content | Runs | Est. GPU hours |
+| --- | --- | --- | --- | --- |
+| 1 | `step8_01_adaptive_onoff` | `adaptive4` × FedAvg, FLTrust, LFR, Zeno, CAGA, harm rep, harm rep open; `adaptive4p`, clean, hideHigh4 × harm rep open; `onoff4` × the six defenses | 80 | 4–5 (the adaptive attacker scores 5 candidates per hider per round) |
+| 2 | `step8_02_majority` | `hide6`, `lie6` × the six defenses + LFR/Zeno with c = 2 and c = 4; hideHigh4 and testB × LFR/Zeno c = 2; hideHigh × LFR/Zeno c = 4 | 130 | 5–6 |
+| 3 | `step8_03_few` | `hide1`, `lie1`, `testB2` × FedAvg, FLTrust, CAGA, LFR, Zeno (true c), LFR/Zeno c = 4; hide1, lie1 × LFR/Zeno c = 2 | 125 | 5 |
+
+Decisions: the attacker-count replication joins step 8 because CAGA's three candidate claims (step 6, attacker-count study) need seeds 12–16 and share the majority runs. Median and Krum are left out (they fail on DrugBank in step 7). With m = 2, "c = 2" equals the true count, so those runs are not duplicated.
+
+**Analysis fixed before results (2026-10-17).** All on test metrics, last-10-round means, paired over seeds 12–16 with 95% t-intervals; "beats" means the interval is clear of zero. Hiding is judged on MDIR, A Little Is Enough on AUROC.
+- **Claim 1, malicious majority:** CAGA has the lowest MDIR under `hide6` (beats FLTrust, FedAvg, and LFR and Zeno at every count given: true, 2 and 4), and the highest AUROC under `lie6` (same comparisons). **Claim 1b, graceful degradation:** CAGA's MDIR rise from m = 1 to m = 6 (hide1 → hide6, per seed) is smaller than FLTrust's and FedAvg's. Claimed only for the parts that pass.
+- **Claim 2, detecting few attackers:** at m = 1 and 2 (hide1, hideHigh, lie1, testB2), CAGA excludes the attackers in ≥ 50% of post-onset rounds on ≥ 4 of 5 seeds, while LFR and Zeno with the true count do so in ≤ 10%. Reported with each method's honest false-exclusion rate. The claim needs every m in at least one family.
+- **Claim 3, under-estimated count:** CAGA beats LFR c = 2 and Zeno c = 2 at m = 4 and m = 6 in both families (hideHigh4, hide6, testB, lie6). If it passes only in one family, the claim names that family.
+- **Criterion 4, adaptive attacker (characterisation, not pass/fail; see step 6d):** for each defense, the MDIR rise under `adaptive4` against its own clean run, the hiders' mean α per round, and the attackers' exclusion rate. The criterion as written ("with `secret_probe`, MDIR stays at least 50% below FedAvg's") is evaluated on the MDIR *rise over clean*: harm reputation's rise under `adaptive4` ≤ 0.5 × FedAvg's. Secret-probe value: `adaptive4p` vs `adaptive4` against `harm_rep_d2_open` (the attacker's best information), and `harm_rep_d2_open` vs `harm_rep_d2` under `adaptive4`.
+- **On-off** (note: as in every hiding preset, hiders 0 and 4 start at round 12 and hiders 1 and 5 at round 22, the protocol's gradual attacker, so in `onoff4` hiders 1 and 5 attack only in rounds 30–40; the CPU smoke run of every new combination confirmed this and that the adaptive α responds to the budget): MDIR in the on windows (rounds 12–20, 30–40) and off window (21–29), and attackers' exclusion per window, for each defense against `hideHigh4` (always on). Descriptive.
+
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
 
 **Step 10: full scale and cost.** Run the headline table (DrugBank, `clean`, `hideHigh`, `testB`; FedAvg, FLTrust, LFR, harm-gated CAGA; 3 seeds) through `main_fl.py` on Kaggle at full scale (hidden size 500, 200k observations, 100 rounds, `training.round_lr_decay=true` if the lrdecay check passed). This needs the new methods and metrics wired into `main_fl.py`'s strategy. Report runtime per round for every method.
