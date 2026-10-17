@@ -291,6 +291,51 @@ Test, criteria fixed before running (CPU, DrugBank random, tuning seeds 10–11,
 - "Not fully accepted" for LFR, Zeno and norm clip is fixed by construction (drop c = 2 of 10; clip at the median norm), so only FLTrust and CAGA's rates are informative.
 - **Decision:** reported as is; it is the no-attack cost row for ogbl-ddi. CAGA's no-attack cost goes into the paper's limitations together with the DrugBank false alarms (step 5a). No change to the frozen settings: the remaining notebooks must use the same settings for the comparison to hold.
 
+**✅ Step 7 result, all ten notebooks (2026-10-17, Kaggle; 840/840 runs complete, 40 rounds each; git-ignored `results/kaggle_main/`; tables and paired tests from `scripts/paired_main_results.py`).** Test metrics, last-10-round means; differences paired over seeds 12–16 with 95% t-intervals (4 df) and the number of seeds (of 5) in the stated direction.
+
+*Criterion 1 (premise), FedAvg:*
+- `hideHigh4` vs drift only: **MDIR +0.060 [+0.044, +0.075], 5/5 seeds; AUROC −0.001 [−0.005, +0.003]. Passes**, as on the tuning seeds (+0.068). Against clean: MDIR +0.070, AUROC −0.006.
+- `hideHigh` (2 hiders) vs drift only: MDIR +0.021 [−0.002, +0.044], 4/5 seeds. Fails the 0.05 bar again; it stays the dose-response row (2 hiders +0.02, 4 hiders +0.06).
+
+*Criterion 2 ("accuracy hides harm"), each defense under attack vs its own clean run:* **passes for every standard defense.**
+
+| Defense | `hideHigh4` MDIR | `hideHigh4` AUROC | `hideHigh` MDIR | `hideHigh` AUROC |
+| --- | --- | --- | --- | --- |
+| FLTrust | +0.101 [+0.067, +0.135] | −0.007 | +0.063 [+0.030, +0.097] | −0.005 |
+| LFR | +0.112 [+0.071, +0.154] | −0.008 | +0.075 [+0.036, +0.113] | −0.005 |
+| Zeno | +0.094 [+0.070, +0.119] | −0.005 | +0.072 [+0.039, +0.105] | −0.004 |
+| CAGA | +0.091 [+0.052, +0.130] | −0.006 | +0.052 [+0.013, +0.090] | −0.003 |
+| FedAvg | +0.070 [+0.048, +0.092] | −0.006 | +0.031 [+0.002, +0.061] | −0.005 |
+
+All MDIR rises are positive on 5/5 seeds and every AUROC change is under 0.01. **New finding, stronger than the criterion:** the defenses lose *more* safety than FedAvg, because hiding erases their clean-data advantage. With no attack, FLTrust misses 0.417 of high-risk interactions against FedAvg's 0.453. Under `hideHigh4`, every method sits at 0.52–0.55, and no defense's MDIR is distinguishable from FedAvg's (FLTrust vs FedAvg −0.005 [−0.042, +0.033]). LFR and median make hiding *worse* than FLTrust (LFR +0.032 [+0.014, +0.049], 5/5 seeds). The defenses keep AUROC (FLTrust 0.932 vs FedAvg 0.928) while losing all of their safety advantage: that is the paper's headline.
+
+*General attacks, DrugBank random (test AUROC; full table in the script output):*
+- **FLTrust is the strongest defense on DrugBank.** It is best or tied in every row and significantly ahead of every other method under every model attack. Examples (AUROC, FLTrust minus CAGA): IPM +0.013, Gaussian +0.007, sign flip +0.010, min-max +0.007, min-sum +0.008.
+- CAGA is second under the model attacks: above LFR, Zeno and norm clip under IPM and sign flip, and tied with Zeno under min-max and min-sum. Under test B (A Little Is Enough), CAGA, LFR, Zeno and FLTrust tie within 0.004.
+- Median and Krum collapse under test B (AUROC 0.755 and 0.699). Krum costs 0.03 AUROC even with no attack.
+- **Caveat for the paper:** MDIR must be read with AUROC. Under test B, median and Krum have the *lowest* MDIR (0.45, 0.51) with very poor AUROC, because a damaged model can still rank the high-risk pairs high.
+- harm reputation δ 0.2 (negative row) behaves as on the tuning seeds: −0.010 AUROC and +0.066 MDIR vs FLTrust under test B.
+
+*ogbl-ddi (test Hits@20):* noisy, as notebook 6 showed. The only significant ranking results:
+- Under `strong`, every defense beats FedAvg (+0.06 to +0.08).
+- Under min-max, LFR beats FLTrust (+0.030 [+0.008, +0.052], 5/5 seeds) and FedAvg.
+- Test B: CAGA has the highest mean (0.072 vs FLTrust 0.065, LFR 0.072, FedAvg 0.056; CAGA − FLTrust +0.007 [−0.019, +0.033], 4/5 seeds), not significant. The seeds 0–4 effect (+0.036) has not replicated at that size on either confirmation (seeds 5–7, 12–16).
+- With no attack, CAGA costs the most (−0.021 vs FedAvg).
+
+*Cold-drug split:* uninformative at pilot scale. Every method has AUROC 0.52–0.61 and MDIR 0.93–0.96, so the model barely generalises to unseen drugs. No differences are interpretable. **Decision:** the cold table goes to the appendix as a limitation, and cold-drug is re-run at full scale in step 10 (hidden 500, 200k observations, 100 rounds), where the model may learn it; if not, the paper says so.
+
+*Where CAGA stands (the user's goal of finding where it outshines others):* on seeds 12–16 it wins nothing significantly.
+- **Its distinctive property is attribution:** it identifies attackers in the most attack rows. It flags the attackers in 86–100% of post-onset rounds under strong, test A, test B, moderate, sign flip, min-max and min-sum on DrugBank, and in 97–100% on ogbl-ddi.
+- That comes at a 25–45% honest false-exclusion rate. LFR and Zeno, given the true attacker count, reach similar identification under strong (0.99–1.0) with near-zero false alarms.
+- So CAGA's candidate claims remain the count-free ones from the attacker-count study (no c needed; degrades least as attackers grow). Step 8's attacker-count replication on seeds 12–16 tests them.
+
+**Decisions:**
+1. Criteria 1 and 2 pass on fresh seeds, so Paper A goes ahead as threat + metric + benchmark.
+2. The headline result is "defenses keep accuracy but lose all of their safety advantage under coordinated hiding" (criterion 2 table plus the FLTrust-vs-FedAvg MDIR comparison).
+3. FLTrust is reported as the strongest general defense.
+4. CAGA is one of the benchmarked defenses; its attribution rate and count-free operation are reported as properties, not wins, unless step 8 confirms them.
+5. Cold-drug goes to the appendix and step 10.
+
 "9 methods" = FedAvg, norm clip, FLTrust, LFR, Zeno, median, Krum, CAGA, harm reputation δ 0.2; "6" drops median, Krum and harm reputation (secondary attacks and ogbl-ddi, where there are no risk labels). Decisions and reasons: the plan's full matrix (every attack × every method × 5 seeds) would be about 1,200 runs; the secondary attacks and ogbl-ddi use the six methods that matter for the comparison (median and Krum already fail on DrugBank tuning; harm reputation needs risk labels). Total about 40–50 GPU hours, more than one week of Kaggle's free GPU quota (about 30 h/week), so the order above puts the core tables first. A CPU smoke run covered every new combination (cold split with harm reputation and Krum, hideHighLIE, model attacks on ogbl-ddi with LFR and Zeno).
 
 **Step 8: robustness of the defense itself (seeds 12–16, DrugBank).**
