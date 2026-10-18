@@ -275,8 +275,8 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
                else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py" if step == "8"
-               else "grep -q caga_r05 scripts/gpu_variant_study.py" if step == "9"
-               else "grep -q anchor_h50_r02 scripts/gpu_variant_study.py")
+               else "grep -q '_r05' scripts/gpu_variant_study.py" if step == "9"
+               else "grep -q '\"server_h50\"' scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
                   bash(PIP, "cd /kaggle/working/fedddi", f"{version} || "
