@@ -115,8 +115,9 @@ def parse_args() -> argparse.Namespace:
                         "attackers, or 2 when there are none.")
     p.add_argument("--zeno-rho", type=float, default=0.0005)
     p.add_argument("--trim", type=float, default=0.2, help="Trimmed mean: share dropped from each end.")
-    p.add_argument("--anchor-base", choices=("fltrust", "fedavg"), default="fltrust",
-                   help="Risk-anchored aggregation: the aggregate the server corrects.")
+    p.add_argument("--anchor-base", choices=("fltrust", "fedavg", "none"), default="fltrust",
+                   help="Risk-anchored aggregation: the aggregate the server corrects; 'none' is the server-only "
+                        "control (the server trains on its own sample and ignores the clients).")
     p.add_argument("--anchor-high-frac", type=float, default=0.5,
                    help="Share of high-risk pairs in the server's anchoring sample (the root's own share is ~0.25).")
     p.add_argument("--anchor-kappa", type=float, default=1.0,
@@ -544,9 +545,11 @@ def main() -> None:
                     base, r = fltrust_aggregate(params, arrs, server_arrays, [str(i) for i in idx], rnd)
                     fields["fltrust_trust"] = json.dumps([round(t, 3) for t in r.trust])
                     excluded = [t <= 0 for t in r.trust]
-                else:
+                elif a.anchor_base == "fedavg":
                     tot = sum(w)
                     base = [sum(x * y[k] for x, y in zip(w, arrs)) / tot for k in range(len(params))]
+                else:
+                    base = params
                 n_obs = a.root_obs or a.obs_per_client
                 g = torch.Generator().manual_seed(a.seed * 200_003 + rnd)
                 high, rest = torch.nonzero(root_risk == 2).view(-1), torch.nonzero(root_risk != 2).view(-1)
@@ -556,8 +559,11 @@ def main() -> None:
                 root_trainer.split["train"]["edge"] = root_edges[pick]
                 base = [b.astype(p.dtype, copy=False) for b, p in zip(base, params)]
                 anchored = root_client.fit(base, {"server_round": rnd})[0]
-                new, ratio = anchor_correct(params, base, anchored, a.anchor_kappa)
-                fields["anchor_step_ratio"] = round(ratio, 3)
+                if a.anchor_base == "none":
+                    new = anchored
+                else:
+                    new, ratio = anchor_correct(params, base, anchored, a.anchor_kappa)
+                    fields["anchor_step_ratio"] = round(ratio, 3)
             elif a.method == "krum":
                 new, r = krum_aggregate(params, arrs, byz_c, rnd)
                 excluded = r.excluded

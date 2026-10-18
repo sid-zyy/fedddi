@@ -450,6 +450,40 @@ No client is judged or dropped, so coordinated or masked attackers cannot hide b
 
 **Confirmation (only after a go):** fresh seeds 17–21, never used. The chosen variant against FedAvg, FLTrust, LFR, Zeno, FedVal, `fedavg_root`, `anchor_h25` and CAGA, under clean, hideHigh, hideHigh4, hide6, testB, lie6, min-max, fabHigh, and an adaptive attacker built against the anchor (designed before the confirmation runs). **Pass:** test MDIR lower than every other defense under hideHigh and hideHigh4, with the paired 95% interval clear of zero; test AUROC no more than 0.005 below FLTrust's under every attack; no-attack AUROC no more than 0.005 below FedAvg's. This is criterion 3 restated for the new method.
 
+**Tuning result (2026-10-18, Kaggle; 126/126 runs; git-ignored `results/kaggle_main/nm_01_tune/`; validation, last-10-round means, seeds 10–11).**
+
+| Method | Val AUROC, clean | Val MDIR: clean / hideHigh / hideHigh4 / hide6 | Val AUROC: testB / lie6 / min-max |
+| --- | --- | --- | --- |
+| FedAvg | 0.933 | 0.507 / 0.506 / 0.536 / 0.580 | 0.884 / 0.729 / 0.791 |
+| FLTrust | 0.937 | 0.455 / 0.443 / 0.499 / 0.564 | 0.907 / 0.851 / 0.920 |
+| server as a client | 0.938 | 0.459 / 0.457 / 0.491 / 0.529 | 0.901 / 0.790 / 0.849 |
+| FedVal | 0.937 | 0.443 / 0.438 / 0.497 / 0.540 | 0.917 / 0.886 / 0.915 |
+| anchor h25 (no enrichment) | 0.962 | 0.239 / 0.267 / 0.286 / 0.329 | 0.959 / 0.953 / 0.960 |
+| anchor h50 | 0.962 | 0.144 / 0.151 / 0.173 / 0.198 | 0.957 / 0.953 / 0.957 |
+| anchor h100 | 0.939 | 0.090 / 0.092 / 0.088 / 0.103 | 0.929 / 0.905 / 0.932 |
+| anchor h50, κ 0.5 | 0.952 | 0.279 / 0.275 / 0.331 / 0.366 | 0.946 / 0.937 / 0.945 |
+| anchor h50 on FedAvg | 0.964 | 0.136 / 0.173 / 0.196 / 0.217 | 0.955 / 0.948 / 0.955 |
+
+**Formal outcome of the pre-registered rule:** every anchor variant meets the AUROC condition. The lowest mean hiding MDIR is **anchor h100** (0.094 vs FLTrust 0.502), with hideHigh4 0.082 / 0.094 vs FLTrust 0.512 / 0.485 on the two seeds, so the "go" condition holds. `anchor_h25` is not within 0.005 of it.
+
+**Analysis: the go is not taken yet, because the results show confounds the rule did not anticipate.**
+1. **The gain is mostly not robustness.**
+   - Every anchor variant is far better *with no attack* (AUROC +0.025, MDIR 0.14 vs 0.45 for h50), and FedAvg is still improving at round 40 (validation AUROC 0.931 and rising).
+   - The correction hit its cap in every round, so each round adds a full-size server step on clean, IID data, roughly doubling training.
+   - The rise caused by the attack is similar to FLTrust's (validation MDIR, hideHigh4 minus clean: h50 +0.029, h25 +0.047, FLTrust +0.044).
+   - So the method mostly lowers the baseline rather than resisting the attack.
+2. **h100 games the metric.** Its test recall for moderate-risk pairs falls to 0.58 (FLTrust 0.70) and its Hits@20 to 0.05, because it trains almost only on high-risk positives. h50 improves every risk class (test recall low / moderate / high, clean: 0.74 / 0.76 / 0.85 vs FLTrust 0.57 / 0.70 / 0.55). The rule should have guarded against a trade between risk classes. **Decision: if the method goes on, h100 is excluded** (it lowers moderate-risk recall below FLTrust's), and h50 is the candidate. This departs from the rule as written and is recorded as such.
+3. **A missing control, the server alone.** The server holds 12% of the training pairs, clean and IID. If a model trained only on the server's data matches the anchor, the federation adds nothing at this scale. The anchor result would then mean "the server has enough data", and the whole benchmark's root-data assumption (shared by FLTrust, LFR, Zeno and CAGA) would be too generous.
+
+**Controls notebook** (`fedddi_newmethod_02_controls.ipynb`; 56 runs, seeds 10–11, about 2.5–3 GPU hours): server only, h25 and h50 (`--anchor-base none`), at root fraction 0.12. At root fraction 0.02 (about 10.8k pairs): server only h25 and h50, FLTrust, anchor h25 and anchor h50. All × clean, hideHigh4, testB, lie6. FedAvg, FLTrust and anchor at 0.12 are reused from the tuning run (same seeds and code).
+
+**Interpretation, fixed before the controls run** (validation, both seeds):
+- **(i) Anchor's added value over the server alone.** If server-only h50 is within 0.005 AUROC and 0.02 MDIR of anchor h50 under clean, the federation contributes nothing at root fraction 0.12. The anchor result is then reported as "with this much clean server data, training on it beats every defense that only filters with it". The benchmark's main tables add the server-only row as a ceiling check.
+- **(ii) Smaller server data.** The same test at 0.02. At least one fraction is needed where server-only is clearly worse than FedAvg (AUROC ≥ 0.01 below); otherwise the setting cannot show any defense's value.
+- **(iii) Robustness, not just level.** At each fraction: anchor h50's attack-induced rise (hideHigh4 MDIR minus its clean MDIR) vs FLTrust's. The method is claimed as a defense only where its rise is smaller on both seeds by more than the seed gap, *and* it beats server-only under attack.
+
+The confirmation on seeds 17–21 is designed only after these controls.
+
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
 
 **Step 9 re-scoped (2026-10-18), with reasons.** The list above was written when harm-gated CAGA was the paper's defense. After steps 6d–8, the paper's claims are:

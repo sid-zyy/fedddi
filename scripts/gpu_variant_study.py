@@ -95,6 +95,13 @@ for _name, (_h, _k, _base) in {"anchor_h25": ("0.25", "1.0", "fltrust"), "anchor
                                "anchor_avg_h50": ("0.5", "1.0", "fedavg")}.items():
     METHODS[_name] = ["--method", "anchor", "--root-obs", "20000", "--anchor-base", _base,
                       "--anchor-high-frac", _h, "--anchor-kappa", _k]
+# Controls after the tuning run: the server alone (same sampling, ignores the clients), and every server-data
+# method with a smaller server share (2% of the training pairs instead of 12%).
+for _name, _h in (("server_h25", "0.25"), ("server_h50", "0.5")):
+    METHODS[_name] = ["--method", "anchor", "--root-obs", "20000", "--anchor-base", "none",
+                                    "--anchor-high-frac", _h]
+for _m in ("fltrust", "server_h25", "server_h50", "anchor_h25", "anchor_h50"):
+    METHODS[f"{_m}_r02"] = METHODS[_m] + ["--root-frac", "0.02"]
 
 # Step 6 grid (Paper A): harm tolerance x high-risk share of the probe, for both harm modes. Names avoid dots
 # so summarize_variants.py can parse them: t005 = 0.005, h3 = 0.3.

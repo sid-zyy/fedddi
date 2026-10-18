@@ -252,6 +252,9 @@ NEW = [
     ("01_tune", "risk-anchored aggregation and FedVal, tuning", "drugbank", "random",
      [("fedavg fltrust fedavg_root fedval anchor_h25 anchor_h50 anchor_h100 anchor_h50_k05 anchor_avg_h50",
        "clean hideHigh hideHigh4 hide6 testB lie6 minmax")], "5 to 6"),
+    ("02_controls", "server-only control and a smaller server share", "drugbank", "random",
+     [("server_h25 server_h50 fltrust_r02 server_h25_r02 server_h50_r02 anchor_h25_r02 anchor_h50_r02",
+       "clean hideHigh4 testB lie6")], "2.5 to 3"),
 ]
 SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11"}
 LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method"}
@@ -273,7 +276,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
                else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py" if step == "8"
                else "grep -q caga_r05 scripts/gpu_variant_study.py" if step == "9"
-               else "grep -q anchor_h50 scripts/gpu_variant_study.py")
+               else "grep -q anchor_h50_r02 scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
                   bash(PIP, "cd /kaggle/working/fedddi", f"{version} || "
