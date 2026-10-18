@@ -365,6 +365,50 @@ Decisions: the attacker-count replication joins step 8 because CAGA's three cand
 - **Criterion 4, adaptive attacker (characterisation, not pass/fail; see step 6d):** for each defense, the MDIR rise under `adaptive4` against its own clean run, the hiders' mean α per round, and the attackers' exclusion rate. The criterion as written ("with `secret_probe`, MDIR stays at least 50% below FedAvg's") is evaluated on the MDIR *rise over clean*: harm reputation's rise under `adaptive4` ≤ 0.5 × FedAvg's. Secret-probe value: `adaptive4p` vs `adaptive4` against `harm_rep_d2_open` (the attacker's best information), and `harm_rep_d2_open` vs `harm_rep_d2` under `adaptive4`.
 - **On-off** (note: as in every hiding preset, hiders 0 and 4 start at round 12 and hiders 1 and 5 at round 22, the protocol's gradual attacker, so in `onoff4` hiders 1 and 5 attack only in rounds 30–40; the CPU smoke run of every new combination confirmed this and that the adaptive α responds to the budget): MDIR in the on windows (rounds 12–20, 30–40) and off window (21–29), and attackers' exclusion per window, for each defense against `hideHigh4` (always on). Descriptive.
 
+**✅ Step 8 result (2026-10-18, Kaggle; 335/335 runs complete; git-ignored `results/kaggle_main/s8_*`; `scripts/step8_analysis.py` applies the pre-registered analysis, pooled with the step 7 reference runs).** Test metrics, last-10-round means, paired over seeds 12–16, 95% t-intervals; "beats" = interval clear of zero.
+
+*Claim 1, malicious majority: **passes for A Little Is Enough, fails for hiding.***
+
+| CAGA minus … | `lie6` AUROC (higher better) | `hide6` MDIR (lower better) |
+| --- | --- | --- |
+| FedAvg | +0.166 [+0.143, +0.188], 5/5 | −0.000 [−0.024, +0.024] |
+| FLTrust | **+0.044 [+0.025, +0.062], 5/5** | +0.002 [−0.014, +0.019] |
+| LFR (true c = 6) | **+0.011 [+0.004, +0.019], 5/5** | −0.018 [−0.039, +0.002] |
+| Zeno (true c = 6) | **+0.013 [+0.001, +0.024], 5/5** | +0.008 [−0.024, +0.040] |
+| LFR / Zeno c = 2 | +0.106 / +0.104, 5/5 | −0.019 / −0.011 (beats) |
+| LFR / Zeno c = 4 | +0.070 / +0.070, 5/5 | −0.018 / −0.007 |
+| harm reputation | +0.033, 5/5 | −0.000 |
+
+Under A Little Is Enough with 6 of 10 attackers, CAGA keeps AUROC 0.905 against FLTrust 0.861, LFR 0.893, Zeno 0.892 (both given the true count) and FedAvg 0.739, and flags the attackers in 99% of rounds. Under six hiders all methods are tied at MDIR 0.55–0.57. (MDIR caveat again: under `lie6` FedAvg has the lowest MDIR, 0.499, with AUROC 0.739.)
+
+*Claim 1b, graceful degradation: **fails.*** MDIR rise from hide1 to hide6: CAGA +0.080, FLTrust +0.082, FedAvg +0.081, LFR +0.092, Zeno +0.063. The tuning-seed result (CAGA +0.068 vs FLTrust +0.128) did not replicate.
+
+*Claim 2, detecting few attackers: **passes for A Little Is Enough, fails for hiding.*** CAGA flags the single or paired A Little Is Enough attackers in 95–100% of post-onset rounds on 5/5 seeds (`lie1`, `testB2`). LFR, Zeno and FLTrust with the true count flag them in 0–5% on 5/5 seeds. Hiders: CAGA flags them in ≥ 50% of rounds on only 2/5 seeds (seed range 0.11–0.74). Caveats: CAGA's honest false-exclusion rate is 27–40% in these runs, and LFR given an over-estimate (c = 4) also flags the A Little Is Enough attackers (98%, with 2–16% false exclusion). Detecting them does not raise CAGA's accuracy at m = 1–2, because one or two attackers barely hurt the model.
+
+*Claim 3, under-estimated count (c = 2): **passes for A Little Is Enough; partly for hiding.***
+- A Little Is Enough: CAGA beats LFR c = 2 and Zeno c = 2 at m = 4 (testB: +0.009, +0.014 AUROC) and m = 6 (lie6: +0.106, +0.104), 4–5/5 seeds each.
+- Hiding: it beats LFR c = 2 at m = 4 and 6 (−0.026, −0.019 MDIR, 5/5) and Zeno c = 2 at m = 6 (−0.011), but not Zeno c = 2 at m = 4 (−0.014 [−0.042, +0.015]).
+
+*Criterion 4, adaptive attacker (characterisation): **fails as written; the question is moot.*** Harm reputation's MDIR rise under `adaptive4` is 1.27× FedAvg's (+0.084 vs +0.066), not ≤ 0.5×. The adaptive hiders keep α at 0.58–0.91 (mean about 0.78) and lose a little potency: every defense's rise is 0.004–0.03 smaller than under always-on `hideHigh4`. They gain nothing from evasion, because harm reputation never flags them anyway (0% exclusion, as under `hideHigh4`: 3%). Knowing the probe changes nothing: `adaptive4p` vs `adaptive4` against `harm_rep_d2_open` is +0.000 [−0.010, +0.011] MDIR, and open vs secret probe under `adaptive4` is −0.000 [−0.011, +0.010]. Under adaptive hiding, FLTrust and Zeno have the lowest MDIR (0.509, 0.507), and CAGA flags the hiders in 51% of rounds.
+
+*On-off (descriptive):*
+- MDIR recovers slightly in the off window (21–29) for every method: FedAvg 0.529 vs 0.560 always-on, CAGA 0.522 vs 0.535.
+- Dilution works as predicted. Against the on-off hiders 0 and 4, harm reputation's exclusion in the second on window falls to 0% (vs 15% always-on), LFR's to 33% (vs 46%) and Zeno's to 58% (vs 71%). CAGA's falls least, to 44% (vs 49%), because its verdict is per round, not cumulative.
+
+**Decisions (2026-10-18):**
+1. **CAGA's paper claim is about A Little Is Enough, on DrugBank:**
+   - with a malicious majority, CAGA keeps the highest AUROC of every defense tested, beating oracle-count LFR and Zeno and FLTrust on 5/5 seeds;
+   - it identifies one or two A Little Is Enough attackers that FLTrust, LFR and Zeno never flag;
+   - it beats LFR and Zeno when they under-estimate the attacker count.
+
+   It is stated with its cost (27–45% honest false exclusion, the largest no-attack cost on ogbl-ddi) and its limits:
+   - only on DrugBank (on ogbl-ddi, test B with 4 attackers was a non-significant +0.007);
+   - at m = 4 it only ties the oracle-count defenses;
+   - an over-estimated count gives LFR the same detection.
+2. Graceful degradation (1b) and detection of few hiders are dropped.
+3. Criterion 4 is reported as a characterisation. No harm defense works, so there is nothing for the adaptive attacker to evade; the secret probe has no measurable value. The paper says so plainly.
+4. The paper's framing stays threat + metric + benchmark. CAGA's A Little Is Enough results become one subsection ("a count-free effect-based gate resists crafted majority attacks").
+
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
 
 **Step 10: full scale and cost.** Run the headline table (DrugBank, `clean`, `hideHigh`, `testB`; FedAvg, FLTrust, LFR, harm-gated CAGA; 3 seeds) through `main_fl.py` on Kaggle at full scale (hidden size 500, 200k observations, 100 rounds, `training.round_lr_decay=true` if the lrdecay check passed). This needs the new methods and metrics wired into `main_fl.py`'s strategy. Report runtime per round for every method.
