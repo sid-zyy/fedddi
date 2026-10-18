@@ -27,6 +27,7 @@ COPY = bash("SCRIPT=$(find /kaggle/input -path '*fedddi/scripts/kaggle_gpu_check
             "[ -n \"$SCRIPT\" ] || { echo 'fedddi_code.zip dataset not found: use Add Input'; exit 1; }",
             "SRC=$(dirname \"$(dirname \"$SCRIPT\")\")", "echo \"code found at $SRC\"",
             "rm -rf /kaggle/working/fedddi && cp -r \"$SRC\" /kaggle/working/fedddi",
+            "command -v nvidia-smi >/dev/null || { echo 'No GPU: set Settings > Accelerator to GPU T4 and run again'; exit 1; }",
             "nvidia-smi --query-gpu=name,memory.total --format=csv")
 COPY_DB = bash("DB=$(find /kaggle/input -name drugbank_ddi.pt | head -1)",
                "[ -n \"$DB\" ] || { echo 'drugbank_ddi.pt not found: attach your private DrugBank dataset'; exit 1; }",
