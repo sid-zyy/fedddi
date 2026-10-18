@@ -516,6 +516,39 @@ The confirmation on seeds 17–21 is designed only after these controls.
 
 **Decision pending the user** (the paper's framing changes): whether to confirm anchoring on seeds 17–21 as a "use the clean data, don't just filter with it" result, with honest robustness caveats, or to report it as a tuning-seed observation. Either way, step 10 must add the server-only row at full scale.
 
+**Decision (2026-10-19, the user): confirm anchoring as a finding.** Claim: "use the clean server data to train, with high-risk pairs enriched, not only to filter". It is not claimed as more robust, and the server-only results are reported alongside.
+
+**Confirmation set-up** (`results/kaggle/fedddi_confirm_anchor_0{1,2,3}_*.ipynb`; fresh seeds 17–21, never used; step 7 settings; root share 0.12; 375 runs, about 15–18 GPU hours):
+
+| # | Notebook | Content | Runs |
+| --- | --- | --- | --- |
+| 1 | `confirm_anchor_01_core` | clean, hideHigh4 | 90 |
+| 2 | `confirm_anchor_02_hiding` | hideHigh, hide6, hideHighLIE | 135 |
+| 3 | `confirm_anchor_03_general` | testB, lie6, min-max (+ CAGA) | 150 |
+
+Methods: FedAvg, FLTrust, LFR, Zeno, FedVal, server-only h25 and h50, anchor h25 and anchor h50 (κ 1, FLTrust base); notebook 3 adds CAGA, the best defense under lie6 in step 8.
+
+Decisions, with reasons:
+- **The candidate is anchor h50.** h100 is excluded because it trades moderate-risk recall (tuning result).
+- **`fedavg_root` is dropped:** on tuning it was below FLTrust and the server-only rows are the stronger control.
+- **CAGA is dropped from notebooks 1–2:** it was not better than FLTrust under hiding on seeds 12–16.
+- **The "adaptive attacker built against the anchor" is replaced by the strongest hiding we have:** six hiders (a majority) and hiding combined with A Little Is Enough. Anchoring judges no client, so there is no gate to evade; an attacker's best response is maximal hiding pressure, which these presets apply.
+
+**Pass criteria, fixed 2026-10-19 before any confirmation run** (test metrics, last-10-round means, paired over seeds 17–21, 95% t-intervals):
+- **C1, safety level:** anchor h50 has lower MDIR than every other method (including server-only h50 and anchor h25) under hideHigh and hideHigh4, with each interval clear of zero.
+- **C2, accuracy:** anchor h50's AUROC is no more than 0.005 below FLTrust's under every attack, and no more than 0.005 below FedAvg's with no attack.
+- **C3, no trading between risk classes:** anchor h50's mean test recall for low- and for moderate-risk pairs is at least FLTrust's under clean and hideHigh4.
+- **C4, the enrichment matters:** anchor h50's MDIR is below anchor h25's under clean and hideHigh4 (interval clear of zero), with AUROC within 0.005.
+- **Reported, not claimed:**
+  - the attack-induced MDIR rise (each method's attack minus clean) vs FLTrust's;
+  - server-only vs FedAvg AUROC;
+  - anchor vs CAGA under lie6.
+
+Outcomes:
+- **C1–C4 pass:** the paper presents risk-anchored aggregation as its recommended practice, framed as above.
+- **C1–C3 pass but C4 fails:** it is reported as server-assisted aggregation, and the risk enrichment is not claimed.
+- **C1 or C2 fails:** it is reported as a tuning-seed observation.
+
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
 
 **Step 9 re-scoped (2026-10-18), with reasons.** The list above was written when harm-gated CAGA was the paper's defense. After steps 6d–8, the paper's claims are:
