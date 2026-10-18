@@ -484,6 +484,38 @@ No client is judged or dropped, so coordinated or masked attackers cannot hide b
 
 The confirmation on seeds 17–21 is designed only after these controls.
 
+**Controls result (2026-10-19, Kaggle; 56/56 runs; git-ignored `results/kaggle_main/nm_02_controls/`; validation, seeds 10–11).**
+
+| Method | Root share | AUROC: clean / hideHigh4 / lie6 | MDIR: clean / hideHigh4 | MDIR rise, hideHigh4 − clean (seed 10, 11) |
+| --- | --- | --- | --- | --- |
+| FedAvg | – | 0.933 / 0.927 / 0.729 | 0.507 / 0.536 | +0.028, +0.031 |
+| FLTrust | 0.12 | 0.937 / 0.934 / 0.851 | 0.455 / 0.499 | +0.021, +0.067 |
+| server only h25 | 0.12 | 0.936 / 0.938 / 0.936 | 0.381 / 0.370 | −0.030, +0.008 |
+| server only h50 | 0.12 | 0.921 / 0.932 / 0.921 | 0.258 / 0.226 | −0.002, −0.062 |
+| anchor h25 | 0.12 | 0.962 / 0.959 / 0.953 | 0.239 / 0.286 | +0.035, +0.059 |
+| anchor h50 | 0.12 | 0.962 / 0.961 / 0.953 | 0.144 / 0.173 | +0.012, +0.046 |
+| FLTrust | 0.02 | 0.938 / 0.934 / 0.862 | 0.448 / 0.494 | +0.065, +0.027 |
+| server only h25 | 0.02 | 0.928 / 0.925 / 0.928 | 0.409 / 0.410 | +0.009, −0.007 |
+| server only h50 | 0.02 | 0.921 / 0.920 / 0.921 | 0.277 / 0.290 | +0.012, +0.016 |
+| anchor h25 | 0.02 | 0.961 / 0.957 / 0.949 | 0.235 / 0.292 | +0.065, +0.048 |
+| anchor h50 | 0.02 | 0.961 / 0.959 / 0.945 | 0.161 / 0.194 | +0.032, +0.034 |
+
+(Server-only runs ignore the clients, so their clean, testB and lie6 rows are the same run up to seed noise.)
+
+**Against the interpretation fixed before the run:**
+- **(i) The federation adds value on top of the server: anchor ≠ server alone.** Anchor h50 vs server-only h50 at 0.12: AUROC +0.041, MDIR −0.114 with no attack, on both seeds; the same at 0.02. Anchoring beats both of its parts, which points to the server's IID step correcting the clients' non-IID drift.
+  - This is a known effect in server-assisted federated learning (hybrid server-client training, FedDUAP-style shared server data); the general idea is not new.
+  - The risk enrichment is the new part: h50 vs h25 lowers MDIR by 0.07–0.11 at equal AUROC, with every risk class's recall at or above FLTrust's.
+- **(ii) Fails: no fraction makes the server alone clearly worse than FedAvg.**
+  - At 0.12, the server alone matches FedAvg's AUROC (0.936 vs 0.933) and has *lower* MDIR than every filtering defense (0.381 vs FLTrust 0.455).
+  - At 0.02 (10.8k pairs), it is only 0.005 AUROC below FedAvg, short of the 0.01 required.
+  - At pilot scale the federation is weak: ten non-IID clients with 20k observations each barely beat one site holding 2% of the data. This weakens the whole benchmark, not only the new method, and must be checked at full scale (step 10, with a server-only row).
+- **(iii) Fails: anchoring is not more robust, only better.** Its attack-induced MDIR rise is smaller than FLTrust's on both seeds at 0.12 (h50: +0.012 / +0.046 vs +0.021 / +0.067), but by less than FLTrust's own seed gap (0.046). At 0.02 it is smaller on one seed only. It does beat the server alone under attack (MDIR 0.173 vs 0.226, AUROC 0.961 vs 0.932).
+
+**What this means.** Training on the clean server data, with high-risk pairs enriched, gives far safer models under every attack: hideHigh4 MDIR 0.17 vs 0.50 for FLTrust, and lie6 AUROC 0.95 vs 0.85. Hiding still costs it about as much as it costs the filtering defenses. The gain is in the level, not in robustness, and much of it would appear with any server-side training. By the paper's own definition this is not a defense against the attack. It is a finding about how to use the clean-data assumption that FLTrust, LFR, Zeno and CAGA already make: using that data as a training signal beats using it as a filter by a wide margin. That finding also exposes how much that assumption gives away at pilot scale.
+
+**Decision pending the user** (the paper's framing changes): whether to confirm anchoring on seeds 17–21 as a "use the clean data, don't just filter with it" result, with honest robustness caveats, or to report it as a tuning-seed observation. Either way, step 10 must add the server-only row at full scale.
+
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
 
 **Step 9 re-scoped (2026-10-18), with reasons.** The list above was written when harm-gated CAGA was the paper's defense. After steps 6d–8, the paper's claims are:
