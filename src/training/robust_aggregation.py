@@ -234,3 +234,61 @@ def probe_auroc_error(z: np.ndarray, n_pos: int) -> float:
     r = rankdata(z)
     auc = (r[:n_pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
     return float(1.0 - auc)
+
+
+GroupLossFn = Callable[[NDArrays], np.ndarray]
+
+
+def fedval_scores(group_losses: np.ndarray, s1: float = 3.0, s2: float = 3.0, c: float = 3.0,
+                  s1_avg: float = 5.0) -> np.ndarray:
+    """FedVal (Valadi et al., 2023) client scores from per-group validation losses `group_losses` (clients x
+    groups). Each group k adds max(1, (mean_k / mean_avg)^s2) * s1 * (mean_k - L_dk) / MAD_k + c * s1, so a
+    client below the group mean gains and groups the federation does badly on count more; an overall
+    average-loss dimension (slope s1_avg, no bias reducer) is added as in the paper. Negative scores are
+    clipped to 0 (the paper does not say)."""
+    L = np.asarray(group_losses, dtype=np.float64)
+    mean_k = L.mean(axis=0)
+    mad_k = np.maximum(np.abs(L - mean_k).mean(axis=0), 1e-12)
+    bias = np.maximum(1.0, (mean_k / max(mean_k.mean(), 1e-12)) ** s2)
+    score = (bias * s1 * (mean_k - L) / mad_k + c * s1).sum(axis=1)
+    avg = L.mean(axis=1)
+    score += s1_avg * (avg.mean() - avg) / max(np.abs(avg - avg.mean()).mean(), 1e-12) + c * s1_avg
+    return np.maximum(score, 0.0)
+
+
+def fedval_aggregate(old_arrays: NDArrays, client_arrays: List[NDArrays], group_loss_fn: GroupLossFn,
+                     mean_loss_fn: MetricFn, s2: float = 3.0, server_round: int = 0
+                     ) -> "tuple[NDArrays, SelectionReport, float]":
+    """FedVal aggregation: old + score-weighted mean of the client updates. `group_loss_fn(arrays)` gives a
+    model's mean validation loss per group (here: per risk class of the probe positives). The bias-reducer
+    exponent s2 is re-chosen each round from {s2, s2 +- 0.5, s2 +- 5} as the one whose aggregate has the
+    lowest `mean_loss_fn`; it is returned for the next round. Clients scored 0 count as excluded."""
+    n = len(client_arrays)
+    L = np.stack([np.asarray(group_loss_fn(a), dtype=np.float64) for a in client_arrays])
+    best = None
+    for cand in (s2, s2 + 0.5, s2 - 0.5, s2 - 5.0, s2 + 5.0):
+        sc = fedval_scores(L, s2=cand)
+        if sc.sum() <= 0:
+            sc = np.ones(n)
+        new = [o + sum(w * (arrs[k] - o) for w, arrs in zip(sc, client_arrays)) / sc.sum()
+               for k, o in enumerate(old_arrays)]
+        loss = float(mean_loss_fn(new))
+        if best is None or loss < best[0]:
+            best = (loss, cand, sc, new)
+    _, s2_new, sc, new = best
+    new = [x.astype(o.dtype, copy=False) for x, o in zip(new, old_arrays)]
+    return new, SelectionReport("fedval", server_round, [bool(v <= 0) for v in sc], sc.tolist()), s2_new
+
+
+def anchor_correct(old_arrays: NDArrays, base_arrays: NDArrays, anchored_arrays: NDArrays, kappa: float
+                   ) -> "tuple[NDArrays, float]":
+    """Risk-anchored correction: move the aggregate `base` towards `anchored` (the server's model after
+    training from `base` on its risk-enriched clean pairs), with the step capped at `kappa` times the norm of
+    the aggregate's own update (base - old), so the server can steer but not replace the federation.
+    Returns the corrected arrays and the applied step norm relative to the aggregate update."""
+    d = [a.astype(np.float64) - b for a, b in zip(anchored_arrays, base_arrays)]
+    nd = float(np.linalg.norm(_flatten(d)))
+    nu = float(np.linalg.norm(_flatten([b.astype(np.float64) - o for b, o in zip(base_arrays, old_arrays)])))
+    scale = 1.0 if nd == 0.0 or nd <= kappa * nu else kappa * nu / nd
+    new = [(b + scale * x).astype(b.dtype) for b, x in zip(base_arrays, d)]
+    return new, (scale * nd / nu if nu > 0 else 0.0)

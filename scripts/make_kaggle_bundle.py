@@ -246,23 +246,34 @@ STEP9 = [
      [("fedavg fltrust lfr zeno", SRV_ATK),
       ("fltrust_r05 fltrust_r20 lfr_r05 lfr_r20 zeno_r05 zeno_r20 caga_r05 caga_r20", SRV_ATK)], "4"),
 ]
-SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11"}
+# New method (after step 8): risk-anchored aggregation and FedVal, tuned on seeds 10-11; confirmation on fresh
+# seeds 17-21 only after the pre-registered selection (PUBLICATION_PLAN.md, "New method").
+NEW = [
+    ("01_tune", "risk-anchored aggregation and FedVal, tuning", "drugbank", "random",
+     [("fedavg fltrust fedavg_root fedval anchor_h25 anchor_h50 anchor_h100 anchor_h50_k05 anchor_avg_h50",
+       "clean hideHigh hideHigh4 hide6 testB lie6 minmax")], "5 to 6"),
+]
+SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11"}
+LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method"}
 JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
-        + [("9", "s9", len(STEP9), *m) for m in STEP9])
+        + [("9", "s9", len(STEP9), *m) for m in STEP9] + [("NM", "nm", len(NEW), *m) for m in NEW])
 for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     out = f"/kaggle/working/results/{prefix}_{key}"
     n_runs = sum(len(m.split()) * len(a.split()) * len(SEEDS[step].split()) for m, a in blocks)
     db = dataset == "drugbank"
-    cells = [md(f"# FedDDI-CAGA Paper A, step {step} ({key[:2]} of {total}): {title}" + NL + NL + HEAD + NL + NL
+    cells = [md(f"# FedDDI-CAGA Paper A, {LABEL[step]} ({key[:2]} of {total}): {title}" + NL + NL + HEAD + NL + NL
                 + ((PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL) if db else "")
                 + {"7": "Main results on fresh seeds 12 to 16 (never used before), frozen settings. ",
                    "8": "Robustness runs on seeds 12 to 16 with the step 7 settings. ",
-                   "9": "Ablations on tuning seeds 10 and 11, step 7 settings otherwise. "}[step] + f"{n_runs} runs, about "
+                   "9": "Ablations on tuning seeds 10 and 11, step 7 settings otherwise. ",
+                   "NM": "Tuning runs on seeds 10 and 11 (fresh seeds are kept for the confirmation), step 7 settings "
+                         "otherwise. "}[step] + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
                else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py" if step == "8"
-               else "grep -q caga_r05 scripts/gpu_variant_study.py")
+               else "grep -q caga_r05 scripts/gpu_variant_study.py" if step == "9"
+               else "grep -q anchor_h50 scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
                   bash(PIP, "cd /kaggle/working/fedddi", f"{version} || "
@@ -287,7 +298,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     cells += [md("## 5. Summary table"),
               code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
               md("## 6. Package results"), PACK]
-    nbs[f"fedddi_{'main' if step == '7' else 'step' + step}_{key}.ipynb"] = cells
+    nbs[f"fedddi_{'main' if step == '7' else 'newmethod' if step == 'NM' else 'step' + step}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():
     json.dump({"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},

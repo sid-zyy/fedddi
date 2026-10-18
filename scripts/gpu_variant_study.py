@@ -84,6 +84,17 @@ for _m in ("caga", "lfr", "zeno"):
 for _m in ("caga", "lfr", "zeno", "fltrust"):
     METHODS[f"{_m}_r05"] = METHODS[_m] + ["--root-frac", "0.05"]
     METHODS[f"{_m}_r20"] = METHODS[_m] + ["--root-frac", "0.2"]
+# New-method study (after step 8): FedVal (per-risk-class validation scores; a baseline reviewers expect), the
+# server as one more client (fedavg_root), and risk-anchored aggregation: FLTrust (or FedAvg) aggregate, then a
+# server step from it on clean pairs with h = share of high-risk pairs (h25 ~ the root's own share, i.e. no
+# enrichment: the "just more server training" control), capped at kappa x the aggregate's update norm.
+METHODS["fedval"] = ["--method", "fedval"]
+METHODS["fedavg_root"] = ["--method", "fedavg_root", "--root-obs", "20000"]
+for _name, (_h, _k, _base) in {"anchor_h25": ("0.25", "1.0", "fltrust"), "anchor_h50": ("0.5", "1.0", "fltrust"),
+                               "anchor_h100": ("1.0", "1.0", "fltrust"), "anchor_h50_k05": ("0.5", "0.5", "fltrust"),
+                               "anchor_avg_h50": ("0.5", "1.0", "fedavg")}.items():
+    METHODS[_name] = ["--method", "anchor", "--root-obs", "20000", "--anchor-base", _base,
+                      "--anchor-high-frac", _h, "--anchor-kappa", _k]
 
 # Step 6 grid (Paper A): harm tolerance x high-risk share of the probe, for both harm modes. Names avoid dots
 # so summarize_variants.py can parse them: t005 = 0.005, h3 = 0.3.

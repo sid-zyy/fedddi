@@ -43,19 +43,20 @@ from src.training.evaluate import score_edges  # noqa: E402
 from src.training.fl_client import FedDDIClient  # noqa: E402
 from src.training.fltrust import fltrust_aggregate  # noqa: E402
 from src.training.robust_aggregation import (  # noqa: E402
-    clip_and_average, err_aggregate, krum_aggregate, lfr_aggregate, median_aggregate, probe_auroc_error,
-    trimmed_mean_aggregate, zeno_aggregate)
+    anchor_correct, clip_and_average, err_aggregate, fedval_aggregate, krum_aggregate, lfr_aggregate,
+    median_aggregate, probe_auroc_error, trimmed_mean_aggregate, zeno_aggregate)
 from src.training import safety_metrics as sm  # noqa: E402
 from src.training.model_attacks import ATTACKS as MODEL_ATTACKS, apply_model_attack  # noqa: E402
 from src.training.trainer import build_client_trainer  # noqa: E402
 from src.utils.utils import seed_everything  # noqa: E402
 
 METHODS = ("fedavg", "fedavg_root", "normclip", "fltrust", "caga", "caga_noblock",
-           "lfr", "err", "zeno", "krum", "median", "trimmed")
+           "lfr", "err", "zeno", "krum", "median", "trimmed", "fedval", "anchor")
 # Methods that reserve clean server ("root") edges: CAGA and FLTrust train or probe on them; LFR, ERR
 # and Zeno score candidates on the same probe CAGA uses.
-ROOT_METHODS = ("caga", "caga_noblock", "fltrust", "fedavg_root", "lfr", "err", "zeno")
-PROBE_METHODS = ("caga", "caga_noblock", "lfr", "err", "zeno")
+# FedVal scores clients per risk class of the same probe; the risk-anchored method trains on root edges.
+ROOT_METHODS = ("caga", "caga_noblock", "fltrust", "fedavg_root", "lfr", "err", "zeno", "fedval", "anchor")
+PROBE_METHODS = ("caga", "caga_noblock", "lfr", "err", "zeno", "fedval")
 DRIFT_LEVELS = jp.DRIFT_LEVELS
 
 
@@ -114,6 +115,12 @@ def parse_args() -> argparse.Namespace:
                         "attackers, or 2 when there are none.")
     p.add_argument("--zeno-rho", type=float, default=0.0005)
     p.add_argument("--trim", type=float, default=0.2, help="Trimmed mean: share dropped from each end.")
+    p.add_argument("--anchor-base", choices=("fltrust", "fedavg"), default="fltrust",
+                   help="Risk-anchored aggregation: the aggregate the server corrects.")
+    p.add_argument("--anchor-high-frac", type=float, default=0.5,
+                   help="Share of high-risk pairs in the server's anchoring sample (the root's own share is ~0.25).")
+    p.add_argument("--anchor-kappa", type=float, default=1.0,
+                   help="Cap on the anchoring step, relative to the norm of the aggregate's update.")
     p.add_argument("--log-cch", action="store_true",
                    help="Log every client's Counterfactual Clinical Harm each round (leave-one-out).")
     p.add_argument("--cch-anchor", type=int, default=2000,
@@ -400,6 +407,8 @@ def main() -> None:
                          harm_rep_delta=a.caga_harm_rep_delta)
     if a.caga_harm_gate and not has_risk:
         raise SystemExit("--caga-harm-gate needs risk labels (DrugBank)")
+    if a.method in ("fedval", "anchor") and not has_risk:
+        raise SystemExit(f"--method {a.method} needs risk labels (DrugBank)")
     caga_state: Dict[str, Any] = {}
     # A client's share of each drug class, from its own observation mixture (coarse metadata the
     # server is assumed to know). The probe sample's class is its first drug's ATC class, the same
@@ -431,7 +440,7 @@ def main() -> None:
                                "client_losses": json.dumps([round(float(f[2]["loss"]), 4) for f in fits])}
 
         server_arrays = None
-        if a.method in ("fltrust", "fedavg_root"):
+        if a.method in ("fltrust", "fedavg_root") or (a.method == "anchor" and a.anchor_base == "fltrust"):
             # The server trains on a fresh client-sized sample of root edges, taking as many optimizer
             # steps as a client (FLTrust rescales client updates to this update's norm).
             g = torch.Generator().manual_seed(a.seed * 100_003 + rnd)
@@ -441,9 +450,10 @@ def main() -> None:
         loss_fn = probe = sw = score_fn = probe_risk = None
         if a.method in PROBE_METHODS:
             pseed = probe_seed(rnd, f"server-secret-{a.seed}" if a.caga_secret_probe else None)
-            if a.caga_harm_gate:
+            if a.caga_harm_gate or a.method == "fedval":
                 probe, probe_risk = sample_risk_probe(root_edges, root_risk, num_nodes, hp.probe_size, pseed, device,
-                                                      root_trainer.edge_index, a.caga_probe_high_frac)
+                                                      root_trainer.edge_index,
+                                                      a.caga_probe_high_frac if a.caga_harm_gate else None)
                 score_fn = lambda x: score_arrays_on_probe(root_trainer, block_map, x, probe)  # noqa: E731
             else:
                 probe = sample_probe_edges(root_pos_edges=root_trainer.split["train"]["edge"], num_nodes=num_nodes,
@@ -518,6 +528,36 @@ def main() -> None:
                 new, r = err_aggregate(arrs, w, err_fn, byz_c, rnd)
                 fields["err_score"] = json.dumps([round(v, 5) for v in r.scores])
                 excluded = r.excluded
+            elif a.method == "fedval":
+                groups = [probe_risk == k for k in range(3)]
+                group_loss = lambda x: np.array([float(v[g].mean()) if g.any() else 0.0  # noqa: E731
+                                                 for v in [loss_fn(x)] for g in groups])
+                new, r, state["fedval_s2"] = fedval_aggregate(params, arrs, group_loss, lambda x: float(loss_fn(x).mean()),
+                                                              state.get("fedval_s2", 3.0), rnd)
+                fields["fedval_score"] = json.dumps([round(v, 2) for v in r.scores])
+                fields["fedval_s2"] = state["fedval_s2"]
+                excluded = r.excluded
+            elif a.method == "anchor":
+                # Risk-anchored aggregation: a robust aggregate, then a capped server step on clean pairs
+                # enriched in high-risk interactions (no client is judged or dropped).
+                if a.anchor_base == "fltrust":
+                    base, r = fltrust_aggregate(params, arrs, server_arrays, [str(i) for i in idx], rnd)
+                    fields["fltrust_trust"] = json.dumps([round(t, 3) for t in r.trust])
+                    excluded = [t <= 0 for t in r.trust]
+                else:
+                    tot = sum(w)
+                    base = [sum(x * y[k] for x, y in zip(w, arrs)) / tot for k in range(len(params))]
+                n_obs = a.root_obs or a.obs_per_client
+                g = torch.Generator().manual_seed(a.seed * 200_003 + rnd)
+                high, rest = torch.nonzero(root_risk == 2).view(-1), torch.nonzero(root_risk != 2).view(-1)
+                n_high = int(round(a.anchor_high_frac * n_obs))
+                pick = torch.cat([high[torch.randint(0, high.numel(), (n_high,), generator=g)],
+                                  rest[torch.randint(0, rest.numel(), (n_obs - n_high,), generator=g)]])
+                root_trainer.split["train"]["edge"] = root_edges[pick]
+                base = [b.astype(p.dtype, copy=False) for b, p in zip(base, params)]
+                anchored = root_client.fit(base, {"server_round": rnd})[0]
+                new, ratio = anchor_correct(params, base, anchored, a.anchor_kappa)
+                fields["anchor_step_ratio"] = round(ratio, 3)
             elif a.method == "krum":
                 new, r = krum_aggregate(params, arrs, byz_c, rnd)
                 excluded = r.excluded

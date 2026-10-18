@@ -222,3 +222,42 @@ def test_probe_auroc_error():
     assert probe_auroc_error(np.array([3.0, 2.0, 0.0, 1.0]), 2) == pytest.approx(0.0)
     assert probe_auroc_error(np.array([0.0, 1.0, 2.0, 3.0]), 2) == pytest.approx(1.0)
     assert probe_auroc_error(np.array([1.0, 1.0]), 1) == pytest.approx(0.5)
+
+
+def test_fedval_scores_reward_low_loss_and_upweight_the_worst_group():
+    from src.training.robust_aggregation import fedval_scores
+
+    # 4 clients x 3 groups; client 3 is worse only on group 2, the group the federation does worst on.
+    L = np.array([[0.5, 0.6, 1.0], [0.5, 0.6, 1.0], [0.5, 0.6, 1.0], [0.5, 0.6, 2.0]])
+    s = fedval_scores(L)
+    assert s[3] < s[0] and np.allclose(s[:3], s[0])
+    # The same excess on a group the federation does well on costs less (no bias-reducer boost).
+    L2 = np.array([[0.5, 0.6, 1.0], [0.5, 0.6, 1.0], [0.5, 0.6, 1.0], [1.5, 0.6, 1.0]])
+    s2 = fedval_scores(L2)
+    assert s2[3] > s[3]
+    assert (fedval_scores(np.array([[0.1, 0.1], [9.0, 9.0], [0.1, 0.1]])) >= 0).all()
+
+
+def test_fedval_aggregate_downweights_the_harmful_client_and_picks_s2():
+    from src.training.robust_aggregation import fedval_aggregate
+
+    old = [np.zeros(2)]
+    clients = [[np.array([1.0, 0.0])], [np.array([1.0, 0.0])], [np.array([1.0, 0.0])], [np.array([-3.0, 0.0])]]
+    group = lambda x: np.array([1.0 - 0.1 * x[0][0], 1.0 - 0.3 * x[0][0]])  # noqa: E731
+    mean = lambda x: float(group(x).mean())  # noqa: E731
+    new, rep, s2 = fedval_aggregate(old, clients, group, mean, s2=3.0)
+    assert new[0][0] > 0.0  # plain mean would be 0
+    assert rep.scores[3] < rep.scores[0]
+    assert s2 in (3.0, 3.5, 2.5, -2.0, 8.0)
+
+
+def test_anchor_correct_caps_the_server_step():
+    from src.training.robust_aggregation import anchor_correct
+
+    old, base = [np.zeros(3, dtype=np.float32)], [np.array([1.0, 0.0, 0.0], dtype=np.float32)]
+    far = [np.array([1.0, 10.0, 0.0], dtype=np.float32)]
+    new, ratio = anchor_correct(old, base, far, kappa=0.5)
+    assert np.allclose(new[0], [1.0, 0.5, 0.0]) and abs(ratio - 0.5) < 1e-6 and new[0].dtype == np.float32
+    near = [np.array([1.0, 0.2, 0.0], dtype=np.float32)]
+    new, ratio = anchor_correct(old, base, near, kappa=0.5)
+    assert np.allclose(new[0], near[0]) and abs(ratio - 0.2) < 1e-6

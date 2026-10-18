@@ -409,6 +409,47 @@ Under A Little Is Enough with 6 of 10 attackers, CAGA keeps AUROC 0.905 against 
 3. Criterion 4 is reported as a characterisation. No harm defense works, so there is nothing for the adaptive attacker to evade; the secret probe has no measurable value. The paper says so plainly.
 4. The paper's framing stays threat + metric + benchmark. CAGA's A Little Is Enough results become one subsection ("a count-free effect-based gate resists crafted majority attacks").
 
+### New method: risk-anchored aggregation (started 2026-10-18, before step 9 runs)
+
+**Why.** The paper's biggest gap is that no defense stops coordinated hiding. Every defense tested *selects or weights clients*, and steps 3–8 show why that fails:
+- four hiders' updates look normal on overall loss and similarity;
+- leave-one-out scores are masked;
+- per-client harm scores overlap with honest drifted clients.
+
+A defense that does not need to identify the attackers avoids all three problems.
+
+**Research (2026-10-18).**
+- **Still novel:** no work on poisoning in federated drug-interaction prediction was found; only a drug-recommendation federated-learning paper with norm filtering.
+- **Missing baseline, now added:** FedVal (Valadi et al. 2023, [arXiv 2306.04040](https://arxiv.org/abs/2306.04040)) scores each client per class on server validation data and up-weights the classes the federation does worst on (score per class k: max(1, (L̄_k/L̄_avg)^s2) · s1 · (L̄_k − L_dk)/MAD_k + C·s1, with s1 = 3, C = 3, s2 adaptive from 3, plus an overall-loss term with slope 5). It is the closest existing defense to a risk-aware one; we apply it to the three risk classes of the probe.
+- **Signal concentrated in a subpopulation:** Jebreel et al. ([arXiv 2207.01982](https://arxiv.org/abs/2207.01982)) show that targeted label flipping is visible in the gradients of the affected classes but diluted in the full update. This is consistent with our masking results.
+- **Server fine-tuning as a recovery step:** FedRecover ([arXiv 2210.10936](https://arxiv.org/abs/2210.10936)) found plain fine-tuning on clean server data weak when the server's data is small or unrepresentative. Ours is neither (about 65k pairs, the same distribution), which is why a server-side correction is plausible here.
+- **Subpopulation poisoning** (Jagielski et al.) is the general family our hiding attack belongs to. Its authors argue that standard defenses fail against it, and no FL-specific defense was found.
+
+**Method (`--method anchor`).** Each round:
+1. Compute a robust aggregate: FLTrust by default, or plain FedAvg (`anchor_avg`).
+2. The server trains from that aggregate on a sample of its clean pairs in which a share h is high-risk (the root's natural share is about 0.25).
+3. The result is applied as a correction, capped at κ times the norm of the aggregate's own update, so the server can steer the federation but not replace it.
+
+No client is judged or dropped, so coordinated or masked attackers cannot hide behind each other, and the number of attackers does not matter. Code: `anchor_correct` and `fedval_aggregate` in `src/training/robust_aggregation.py` (tests in `tests/test_robust_aggregation.py`); pilot `--anchor-base --anchor-high-frac --anchor-kappa`; presets `anchor_h25` / `h50` / `h100` (κ 1), `anchor_h50_k05`, `anchor_avg_h50`, `fedval`, `fedavg_root`.
+
+**Smoke-run note:** in 3-round CPU runs the correction hit its cap every round. The server's step is as large as the federation's update, so the controls below are essential.
+
+**Controls, fixed now:**
+- **`anchor_h25`:** the same server training without risk enrichment. It separates "risk anchoring" from "the server trains more".
+- **`fedavg_root`:** the server as one more client.
+- **FLTrust:** the base aggregate on its own.
+- **`anchor_avg_h50`:** shows whether the robust base matters.
+
+**Tuning notebook** (`results/kaggle/fedddi_newmethod_01_tune.ipynb`; 126 runs, seeds 10–11, DrugBank random, step 7 settings otherwise, about 5–6 GPU hours): FedAvg, FLTrust, `fedavg_root`, FedVal and the five anchor variants × clean, hideHigh, hideHigh4, hide6, testB, lie6, min-max.
+
+**Selection rule (fixed 2026-10-18, before results; validation metrics, last-10-round means, as in step 6):**
+- **Choice:** among the anchor variants, pick the one with the lowest mean validation MDIR over hideHigh, hideHigh4 and hide6. It must have validation AUROC no more than 0.005 below FLTrust's under every condition, including clean. Ties within 0.005 MDIR go to the smaller server step (κ 0.5, then lower h).
+- **Go to confirmation** only if the chosen variant's MDIR is at least 0.02 below FLTrust's under hideHigh4 on both seeds.
+- **Interpretation:** if `anchor_h25` does as well (within 0.005), the gain comes from server training rather than risk anchoring, and the paper must say so; the decision on how to frame it is taken from the results.
+- **No go:** if no variant qualifies, the method is reported as a negative result and FedVal joins the benchmark as a baseline.
+
+**Confirmation (only after a go):** fresh seeds 17–21, never used. The chosen variant against FedAvg, FLTrust, LFR, Zeno, FedVal, `fedavg_root`, `anchor_h25` and CAGA, under clean, hideHigh, hideHigh4, hide6, testB, lie6, min-max, fabHigh, and an adaptive attacker built against the anchor (designed before the confirmation runs). **Pass:** test MDIR lower than every other defense under hideHigh and hideHigh4, with the paired 95% interval clear of zero; test AUROC no more than 0.005 below FLTrust's under every attack; no-attack AUROC no more than 0.005 below FedAvg's. This is criterion 3 restated for the new method.
+
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
 
 **Step 9 re-scoped (2026-10-18), with reasons.** The list above was written when harm-gated CAGA was the paper's defense. After steps 6d–8, the paper's claims are:
