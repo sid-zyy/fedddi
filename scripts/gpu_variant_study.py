@@ -67,6 +67,23 @@ for _d in ("0.1", "0.2", "0.3"):
         "--caga-harm-rep", "--caga-harm-rep-delta", _d]
 # Step 8: the same with a probe the clients can know (no secret re-draw), the target of `adaptive4p`.
 METHODS["harm_rep_d2_open"] = [x for x in METHODS["harm_rep_d2"] if x != "--caga-secret-probe"]
+# Step 9 ablations. CAGA's components: no warm-up, paired-test threshold 1 or 3 (default 2), per-block gating
+# (convolutions / MLP / input map) instead of whole clients, final step-size check reduced to the cap.
+METHODS.update({
+    "caga_w0": ["--method", "caga_noblock", "--caga-warmup", "0"],
+    "caga_tz1": METHODS["caga"] + ["--caga-tol-z", "1"],
+    "caga_tz3": METHODS["caga"] + ["--caga-tol-z", "3"],
+    "caga_block": ["--method", "caga", "--caga-warmup", "5"],
+    "caga_cap": METHODS["caga"] + ["--caga-final-check", "cap"],
+})
+# Server data: probe size (default 4,000) for the probe defenses, and the share of training pairs the server
+# holds (default 0.12) for every defense that uses server data (r05 = 0.05, r20 = 0.2).
+for _m in ("caga", "lfr", "zeno"):
+    METHODS[f"{_m}_p1k"] = METHODS[_m] + ["--probe-size", "1000"]
+    METHODS[f"{_m}_p8k"] = METHODS[_m] + ["--probe-size", "8000"]
+for _m in ("caga", "lfr", "zeno", "fltrust"):
+    METHODS[f"{_m}_r05"] = METHODS[_m] + ["--root-frac", "0.05"]
+    METHODS[f"{_m}_r20"] = METHODS[_m] + ["--root-frac", "0.2"]
 
 # Step 6 grid (Paper A): harm tolerance x high-risk share of the probe, for both harm modes. Names avoid dots
 # so summarize_variants.py can parse them: t005 = 0.005, h3 = 0.3.

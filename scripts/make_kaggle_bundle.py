@@ -235,19 +235,34 @@ STEP8 = [
      [("fedavg fltrust caga lfr zeno lfr_c4 zeno_c4", "hide1 lie1 testB2"), ("lfr_c2 zeno_c2", "hide1 lie1")],
      "5 to 6"),
 ]
-JOBS = [("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
+# Step 9 (ablations), tuning seeds 10-11; analysis fixed in PUBLICATION_PLAN.md before the runs.
+ABL_ATK = "clean testB2 testB lie6 hideHigh4"
+SRV_ATK = "clean hideHigh4 testB lie6"
+STEP9 = [
+    ("01_caga_parts", "CAGA's components and the probe size", "drugbank", "random",
+     [("caga caga_w0 caga_tz1 caga_tz3 caga_block caga_cap", ABL_ATK),
+      ("caga_p1k caga_p8k lfr_p1k lfr_p8k zeno_p1k zeno_p8k", SRV_ATK)], "4 to 5"),
+    ("02_server_data", "how much clean data the server holds", "drugbank", "random",
+     [("fedavg fltrust lfr zeno", SRV_ATK),
+      ("fltrust_r05 fltrust_r20 lfr_r05 lfr_r20 zeno_r05 zeno_r20 caga_r05 caga_r20", SRV_ATK)], "4"),
+]
+SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11"}
+JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
+        + [("9", "s9", len(STEP9), *m) for m in STEP9])
 for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     out = f"/kaggle/working/results/{prefix}_{key}"
-    n_runs = sum(len(m.split()) * len(a.split()) * 5 for m, a in blocks)
+    n_runs = sum(len(m.split()) * len(a.split()) * len(SEEDS[step].split()) for m, a in blocks)
     db = dataset == "drugbank"
     cells = [md(f"# FedDDI-CAGA Paper A, step {step} ({key[:2]} of {total}): {title}" + NL + NL + HEAD + NL + NL
                 + ((PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL) if db else "")
-                + ("Main results on fresh seeds 12 to 16 (never used before), frozen settings. " if step == "7" else
-                   "Robustness runs on seeds 12 to 16 with the step 7 settings. ") + f"{n_runs} runs, about "
+                + {"7": "Main results on fresh seeds 12 to 16 (never used before), frozen settings. ",
+                   "8": "Robustness runs on seeds 12 to 16 with the step 7 settings. ",
+                   "9": "Ablations on tuning seeds 10 and 11, step 7 settings otherwise. "}[step] + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
-               else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py")
+               else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py" if step == "8"
+               else "grep -q caga_r05 scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
                   bash(PIP, "cd /kaggle/working/fedddi", f"{version} || "
@@ -267,12 +282,12 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     cells.append(md("## 4. Runs (live progress below)"))
     for methods, attacks in blocks:
         cells.append(code(f"!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset {dataset} "
-                          f"--split {split} --seeds 12 13 14 15 16 --methods {methods} --attacks {attacks} "
+                          f"--split {split} --seeds {SEEDS[step]} --methods {methods} --attacks {attacks} "
                           f"--device cuda --parallel 3 --out {out}"))
     cells += [md("## 5. Summary table"),
               code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
               md("## 6. Package results"), PACK]
-    nbs[f"fedddi_{'main' if step == '7' else 'step8'}_{key}.ipynb"] = cells
+    nbs[f"fedddi_{'main' if step == '7' else 'step' + step}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():
     json.dump({"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},

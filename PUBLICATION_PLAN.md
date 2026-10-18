@@ -411,6 +411,32 @@ Under A Little Is Enough with 6 of 10 attackers, CAGA keeps AUROC 0.905 against 
 
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
 
+**Step 9 re-scoped (2026-10-18), with reasons.** The list above was written when harm-gated CAGA was the paper's defense. After steps 6d–8, the paper's claims are:
+- (a) defenses keep accuracy but lose their safety advantage under coordinated hiding;
+- (b) CAGA resists A Little Is Enough, including with a malicious majority, and spots few such attackers.
+
+The ablations now test what those claims rest on:
+- **Dropped:** risk weighting off, harm gate off, secret probe off. They ablate the harm defense, which failed its selection rule, and step 8 already showed the secret probe has no measurable value.
+- **Class-aware and reputation variants: not re-run.** They are already measured as negative results on seeds 10–11 (GPU variant study, Phase 2): the class-aware probe is exploitable; reputation lets attackers through.
+
+Two notebooks (`results/kaggle/fedddi_step9_*.ipynb`, 204 runs, tuning seeds 10–11, DrugBank random, step 7 settings otherwise):
+
+| # | Notebook | Content | Runs | Est. GPU hours |
+| --- | --- | --- | --- | --- |
+| 1 | `step9_01_caga_parts` | CAGA (reference), warm-up 0, `tol_z` 1 and 3, per-block gating, cap-only final check × clean, testB2, testB, lie6, hideHigh4; probe size 1,000 and 8,000 for CAGA, LFR, Zeno × clean, hideHigh4, testB, lie6 | 108 | 4–5 |
+| 2 | `step9_02_server_data` | FedAvg, FLTrust, LFR, Zeno at root fraction 0.12 (references) and FLTrust, LFR, Zeno, CAGA at 0.05 and 0.2 × clean, hideHigh4, testB, lie6 | 96 | 4 |
+
+Root fraction changes the pool the server draws its probe and FLTrust's 20,000 root pairs from (27k / 65k / 108k pairs); FedAvg holds no server data and is unaffected. CAGA's root-fraction 0.12 references come from notebook 1.
+
+**Analysis fixed before results (2026-10-18).** Test metrics (validation alongside), last-10-round means, each seed reported. Primary metric: AUROC under testB, testB2 and lie6; MDIR under hideHigh4; honest false exclusion under clean. With two seeds there are no intervals. A setting is read as *changing* the result when both seeds move in the same direction by more than the two seeds differ from each other in the reference. Anything weaker is reported as "no clear effect".
+- **CAGA's parts:** for each variant vs CAGA: the primary metric, attackers excluded, and honest false exclusion. The paper's CAGA claims (lie6 AUROC; detection under testB2) are robust to a part if changing it keeps lie6 AUROC above FLTrust's and LFR's, and testB2 detection ≥ 50%.
+- **Probe size:** the same comparisons for CAGA, LFR and Zeno at 1,000 / 4,000 / 8,000.
+- **Server data and claim (a):**
+  - each defense's clean MDIR advantage over FedAvg (FedAvg − defense, clean) at 0.05 / 0.12 / 0.2;
+  - its MDIR under hideHigh4 minus FedAvg's at each fraction.
+
+  Claim (a) holds at a fraction if a defense with a clean advantage ≥ 0.02 has a hideHigh4 gap to FedAvg within ±0.01 (or worse than FedAvg) on both seeds. If more server data keeps the advantage under hiding, the paper says how much data that takes. If it does not, that is the mechanism result: the loss does not come from too little clean data.
+
 **Step 10: full scale and cost.** Run the headline table (DrugBank, `clean`, `hideHigh`, `testB`; FedAvg, FLTrust, LFR, harm-gated CAGA; 3 seeds) through `main_fl.py` on Kaggle at full scale (hidden size 500, 200k observations, 100 rounds, `training.round_lr_decay=true` if the lrdecay check passed). This needs the new methods and metrics wired into `main_fl.py`'s strategy. Report runtime per round for every method.
 
 **Step 11: writing (about 1–2 weeks, overlapping with steps 8–10).** Outline:
