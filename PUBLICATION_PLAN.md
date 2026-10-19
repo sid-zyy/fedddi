@@ -604,6 +604,18 @@ Outcomes:
 - **W1–W3 pass:** the recommended practice becomes anchoring plus risk-weighted client training. Anchor h50 alone is reported as the server-only-change variant.
 - **Otherwise:** anchor h50 stays the recommendation, and client weighting is reported as a tuning-seed observation.
 
+**Client-weighting confirmation outcome (2026-10-19): W1 fails narrowly, so HARBOR (anchor h50) stays the recommendation.** All 60 runs complete, no failures, seeds 22–26 only (`results/kaggle_main/cw_01_head_to_head`; analysis `scripts/confirm_cw_analysis.py`). Differences are HARBOR + client weighting minus HARBOR:
+- **W1 fails.** MDIR with no attack is −0.063 [−0.075, −0.050], but with 4 hiders −0.032 [−0.066, +0.002]. That is lower on 5 of 5 seeds, but the interval touches zero.
+- **W2 passes:** AUROC +0.000 (clean), +0.001 (hideHigh4), −0.001 (lie6).
+- **W3 passes:** low and moderate recall within −0.017.
+- **Reported, not claimed:** lie6 MDIR −0.055 [−0.084, −0.026].
+
+Decision, with reason: the rule fixed before the runs says HARBOR alone stays the recommendation, and it is not relaxed after seeing the data. The result is consistent with the mechanism seen on tuning: client weighting helps most where the high-risk pairs are present (no attack, ALIE), and least under hiding, because hiders delete the pairs being up-weighted. The paper reports client weighting as an optional extension, with these fresh-seed numbers and without a hiding claim.
+
+**HARBOR vs FLTrust replicated on a third set of fresh seeds (22–26).** MDIR is −0.270 (clean), −0.295 (hideHigh4) and −0.397 (lie6), and AUROC +0.023, +0.024 and +0.094, with every interval clear of zero. This matches seeds 17–21 almost exactly.
+
+**Client weighting on FLTrust (reported):** MDIR −0.151 with no attack, but only −0.066 with 4 hiders, at an AUROC cost of −0.003 to −0.005. This is the same pattern: the benefit shrinks under hiding.
+
 **Step 9 server-data notebook extended (2026-10-19).** Added anchor h50 and server-only h50 at root shares 0.05 and 0.2 (32 runs; 128 in the notebook). With the existing 0.02 and 0.12 runs, this gives the curve the server-data caveat needs: how anchoring's gain over server-only and over FLTrust changes with the server's share. Descriptive on seeds 10–11. The full-scale check stays in step 10.
 
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
