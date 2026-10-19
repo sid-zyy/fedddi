@@ -102,6 +102,9 @@ for _name, _h in (("server_h25", "0.25"), ("server_h50", "0.5")):
                                     "--anchor-high-frac", _h]
 for _m in ("fltrust", "server_h25", "server_h50", "anchor_h25", "anchor_h50"):
     METHODS[f"{_m}_r02"] = METHODS[_m] + ["--root-frac", "0.02"]
+for _m in ("server_h50", "anchor_h50"):
+    METHODS[f"{_m}_r05"] = METHODS[_m] + ["--root-frac", "0.05"]
+    METHODS[f"{_m}_r20"] = METHODS[_m] + ["--root-frac", "0.2"]
 # Reviewer baselines for anchoring (simpler ways to favour high-risk pairs). Weight 3 matches the h50 enrichment:
 # high-risk pairs are ~25% of positives, so 50% enrichment raises their relative weight by (0.75/0.25) = 3.
 # _cw3: honest clients up-weight high-risk positives in their loss; fltrust_rh50: FLTrust's server sample enriched;

@@ -580,6 +580,8 @@ New rows:
 - **If one matches**, anchor h50 vs that baseline is confirmed head-to-head on fresh seeds 22–26 under clean, hideHigh4 and lie6 before any wording is fixed. If it still matches there, the claim becomes "train on enriched high-risk data", with anchoring as one way to do it.
 - **`anchor_h50_cw3`** is considered as the recommended variant only if it lowers MDIR by at least 0.03 on both seeds under both conditions, with AUROC within 0.005. It would then also go to seeds 22–26.
 
+**Step 9 server-data notebook extended (2026-10-19).** Added anchor h50 and server-only h50 at root shares 0.05 and 0.2 (32 runs; 128 in the notebook). With the existing 0.02 and 0.12 runs, this gives the curve the server-data caveat needs: how anchoring's gain over server-only and over FLTrust changes with the server's share. Descriptive on seeds 10–11. The full-scale check stays in step 10.
+
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
 
 **Step 9 re-scoped (2026-10-18), with reasons.** The list above was written when harm-gated CAGA was the paper's defense. After steps 6d–8, the paper's claims are:

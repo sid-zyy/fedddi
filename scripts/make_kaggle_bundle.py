@@ -245,7 +245,8 @@ STEP9 = [
       ("caga_p1k caga_p8k lfr_p1k lfr_p8k zeno_p1k zeno_p8k", SRV_ATK)], "4 to 5"),
     ("02_server_data", "how much clean data the server holds", "drugbank", "random",
      [("fedavg fltrust lfr zeno", SRV_ATK),
-      ("fltrust_r05 fltrust_r20 lfr_r05 lfr_r20 zeno_r05 zeno_r20 caga_r05 caga_r20", SRV_ATK)], "4"),
+      ("fltrust_r05 fltrust_r20 lfr_r05 lfr_r20 zeno_r05 zeno_r20 caga_r05 caga_r20", SRV_ATK),
+      ("anchor_h50_r05 anchor_h50_r20 server_h50_r05 server_h50_r20", SRV_ATK)], "5 to 6"),
 ]
 # New method (after step 8): risk-anchored aggregation and FedVal, tuned on seeds 10-11; confirmation on fresh
 # seeds 17-21 only after the pre-registered selection (PUBLICATION_PLAN.md, "New method").
@@ -298,8 +299,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
                else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py" if step == "8"
-               else "grep -q '_r05' scripts/gpu_variant_study.py" if step == "9"
-               else "grep -q finetune_h50 scripts/gpu_variant_study.py" if step == "RB"
+               else "grep -q finetune_h50 scripts/gpu_variant_study.py" if step in ("9", "RB")
                else "grep -q '\"server_h50\"' scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
