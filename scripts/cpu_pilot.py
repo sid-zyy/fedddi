@@ -687,6 +687,9 @@ def main() -> None:
             t = sm.threshold_at_specificity(vn_s, 0.95)
             row["threshold"] = t
             row.update(safety_fields("test", tp, split["test"]["risk"], t))
+            # Test negatives below the validation threshold: a collapsed model can flag everything, which lowers
+            # MDIR while this drops far below 0.95 (see PUBLICATION_PLAN.md, newer-defenses outcome).
+            row["test_specificity"] = float((tn.detach().cpu().float() < t).float().mean())
             row.update(safety_fields("val", vp_s, split["valid"]["risk"], t))
         reports = [clients[i].evaluate(deployed, {"server_round": rnd})[2] for i in special]
         for key, col in (("drift_region_Hits@20", "drift_region_hits20"),

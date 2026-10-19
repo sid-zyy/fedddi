@@ -49,7 +49,7 @@ GROUPS = {"moderate": {0: _P, 1: _P, 2: _D, 3: _D},
 WINDOW_COLS = ("val_auroc", "test_auroc", "val_aupr", "test_aupr", "val_hits20", "test_hits20",
                "poison_fabricated_mean_prob", "poison_suppressed_mean_prob", "threshold",
                "val_mdir_high", "test_mdir_high", "test_recall_low", "test_recall_moderate", "test_recall_high",
-               "val_risk_weighted_recall", "test_risk_weighted_recall")
+               "val_risk_weighted_recall", "test_risk_weighted_recall", "test_specificity")
 SHOW = ("val_auroc", "test_auroc", "test_hits20", "val_mdir_high", "test_mdir_high", "test_risk_weighted_recall",
         "poison_fabricated_mean_prob", "poison_suppressed_mean_prob", "honest_false_exclusion", "attackers_excluded",
         "accepted_honest", "accepted_poisoned", "accepted_drifted", "cch_honest", "cch_poisoned", "cch_drifted",
