@@ -122,6 +122,13 @@ def parse_args() -> argparse.Namespace:
                    help="Share of high-risk pairs in the server's anchoring sample (the root's own share is ~0.25).")
     p.add_argument("--anchor-kappa", type=float, default=1.0,
                    help="Cap on the anchoring step, relative to the norm of the aggregate's update.")
+    p.add_argument("--anchor-feedback", type=int, choices=(0, 1), default=1,
+                   help="0: the anchored model is only deployed (evaluated); training continues from the base "
+                        "aggregate (a server fine-tune that is not fed back).")
+    p.add_argument("--fltrust-high-frac", type=float, default=None,
+                   help="FLTrust's server sample with this share of high-risk pairs (default: the root's own mix).")
+    p.add_argument("--client-high-weight", type=float, default=1.0,
+                   help="Honest clients weight high-risk positives by this factor in their loss (batch-normalised).")
     p.add_argument("--log-cch", action="store_true",
                    help="Log every client's Counterfactual Clinical Harm each round (leave-one-out).")
     p.add_argument("--cch-anchor", type=int, default=2000,
@@ -342,7 +349,9 @@ def main() -> None:
         raise SystemExit("--hide-high, --fabricate-high and --log-cch need risk labels (DrugBank built with "
                          "scripts/prepare_drugbank.py --risk-only)")
     edge_risk = None
-    if a.hide_high or a.fabricate_high:
+    if (a.client_high_weight != 1.0 or a.fltrust_high_frac is not None) and not has_risk:
+        raise SystemExit("--client-high-weight and --fltrust-high-frac need risk labels (DrugBank)")
+    if a.hide_high or a.fabricate_high or a.client_high_weight != 1.0:
         from src.data.drugbank import edge_risk_lookup
         edge_risk = edge_risk_lookup(os.path.join(a.data, "drugbank"))
     cfg = make_cfg(a, os.path.join(out_dir, "ckpt"))
@@ -377,7 +386,14 @@ def main() -> None:
                             device=device, num_rounds=a.rounds, round_lr_decay=a.round_lr_decay, c_id_int=i, poisoning_simulator=poison_sim,
                             data_drift_simulator=drift_sim) for i in range(a.num_clients)]
     special = sorted({e.client_id for e in poison_events} | {e.client_id for e in drift_events})
-    n_attackers = len({e.client_id for e in poison_events} | set(a.lie_clients) | set(a.model_attack_clients))
+    attacker_ids = {e.client_id for e in poison_events} | set(a.lie_clients) | set(a.model_attack_clients)
+    n_attackers = len(attacker_ids)
+    if a.client_high_weight != 1.0:
+        # Honest clients up-weight their high-risk positives (attackers would not).
+        w_index = RiskIndex(edge_risk)
+        w_fn = lambda e: torch.from_numpy(np.where(w_index.risk_of(e) == 2, a.client_high_weight, 1.0))  # noqa: E731
+        for i in set(range(a.num_clients)) - attacker_ids:
+            clients[i].trainer.pos_weight_fn = w_fn
     if a.model_attack and not a.model_attack_clients:
         raise SystemExit("--model-attack needs --model-attack-clients")
     if a.adaptive_hide and not a.hide_high:
@@ -410,6 +426,8 @@ def main() -> None:
         raise SystemExit("--caga-harm-gate needs risk labels (DrugBank)")
     if a.method in ("fedval", "anchor") and not has_risk:
         raise SystemExit(f"--method {a.method} needs risk labels (DrugBank)")
+    if not a.anchor_feedback and (a.method != "anchor" or a.anchor_base == "none"):
+        raise SystemExit("--anchor-feedback 0 needs --method anchor with a base aggregate")
     caga_state: Dict[str, Any] = {}
     # A client's share of each drug class, from its own observation mixture (coarse metadata the
     # server is assumed to know). The probe sample's class is its first drug's ATC class, the same
@@ -445,7 +463,14 @@ def main() -> None:
             # The server trains on a fresh client-sized sample of root edges, taking as many optimizer
             # steps as a client (FLTrust rescales client updates to this update's norm).
             g = torch.Generator().manual_seed(a.seed * 100_003 + rnd)
-            pick = torch.randint(0, root_edges.size(0), (a.root_obs or a.obs_per_client,), generator=g)
+            n_obs = a.root_obs or a.obs_per_client
+            if a.fltrust_high_frac is None:
+                pick = torch.randint(0, root_edges.size(0), (n_obs,), generator=g)
+            else:
+                high, rest = torch.nonzero(root_risk == 2).view(-1), torch.nonzero(root_risk != 2).view(-1)
+                n_high = int(round(a.fltrust_high_frac * n_obs))
+                pick = torch.cat([high[torch.randint(0, high.numel(), (n_high,), generator=g)],
+                                  rest[torch.randint(0, rest.numel(), (n_obs - n_high,), generator=g)]])
             root_trainer.split["train"]["edge"] = root_edges[pick]
             server_arrays = root_client.fit(params, {"server_round": rnd})[0]
         loss_fn = probe = sw = score_fn = probe_risk = None
@@ -564,6 +589,9 @@ def main() -> None:
                 else:
                     new, ratio = anchor_correct(params, base, anchored, a.anchor_kappa)
                     fields["anchor_step_ratio"] = round(ratio, 3)
+                    if not a.anchor_feedback:
+                        state["deploy"] = [n.astype(p.dtype, copy=False) for n, p in zip(new, params)]
+                        new = base
             elif a.method == "krum":
                 new, r = krum_aggregate(params, arrs, byz_c, rnd)
                 excluded = r.excluded
@@ -602,8 +630,9 @@ def main() -> None:
             row["cch"] = json.dumps(cch)
             row["cch_anchor_threshold"] = t_anchor
         params = new_params
+        deployed = caga_state.pop("deploy", params)
 
-        eval_client.set_parameters(params)
+        eval_client.set_parameters(deployed)
         tp, tn, vp_s, vn_s = score_model(eval_trainer, graph, [split["test"]["edge"], split["test"]["edge_neg"],
                                                                split["valid"]["edge"], split["valid"]["edge_neg"]],
                                          a.batch_size, device)
@@ -621,7 +650,7 @@ def main() -> None:
             row["threshold"] = t
             row.update(safety_fields("test", tp, split["test"]["risk"], t))
             row.update(safety_fields("val", vp_s, split["valid"]["risk"], t))
-        reports = [clients[i].evaluate(params, {"server_round": rnd})[2] for i in special]
+        reports = [clients[i].evaluate(deployed, {"server_round": rnd})[2] for i in special]
         for key, col in (("drift_region_Hits@20", "drift_region_hits20"),
                          ("non_drift_region_Hits@20", "non_drift_region_hits20"),
                          ("poison_attack_mean_prob", "poison_attack_mean_prob"),

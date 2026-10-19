@@ -565,6 +565,21 @@ Outcomes:
 - **Two threats to validity must be stated:** (1) at pilot scale the server alone rivals FedAvg, so how much of the gain needs the federation depends on the root share. The controls showed anchoring still beats server-only at 0.02. (2) The server's high-risk labels are assumed to be clean, the same trust assumption FLTrust makes.
 - **Step 10 (full scale) must include** anchor h50, anchor h25 and server-only h50 next to FedAvg and FLTrust, so the scale question in (1) is answered.
 
+**Reviewer baselines for anchoring (2026-10-19), before step 9.** Reason: a reviewer will ask whether a simpler way of favouring high-risk pairs does as well, and if one does, the claim shrinks to "rebalance toward high-risk pairs". This matters more than step 9, which ablates the filters that anchoring has overtaken. Notebook `fedddi_anchor_baselines_01_baselines.ipynb`: tuning seeds 10–11, clean, hideHigh4 and lie6, 36 runs. FedAvg, FLTrust, anchor h50 and server-only h50 are reused from `nm_01_tune` and `nm_02_controls`.
+
+New rows:
+- `fedavg_cw3`, `fltrust_cw3`: honest clients weight high-risk positives ×3 in their loss (batch-normalised). Attackers do not. ×3 matches the h50 enrichment, since high-risk pairs are about 25% of positives.
+- `fltrust_rh50`: FLTrust whose server sample is 50% high-risk. The enriched data is used to filter, not to train.
+- `anchor_post_h50`: the same capped anchoring step, deployed but not fed back; training continues from the FLTrust model.
+- `finetune_h50`: the same, uncapped. This is a plain server fine-tune of each round's FLTrust model.
+- `anchor_h50_cw3`: anchoring plus client weighting (is it complementary?).
+
+**Analysis, fixed before the runs** (validation metrics, last-10-round means, each seed separately):
+- A baseline **matches** anchoring if, on both seeds and under both clean and hideHigh4, its MDIR is within 0.03 of anchor h50's and its AUROC is no more than 0.005 below.
+- **If no baseline matches**, the paper claims the full design ("anchor every round, with enrichment"), and step 10 carries `fltrust_cw3` and `finetune_h50` as rows.
+- **If one matches**, anchor h50 vs that baseline is confirmed head-to-head on fresh seeds 22–26 under clean, hideHigh4 and lie6 before any wording is fixed. If it still matches there, the claim becomes "train on enriched high-risk data", with anchoring as one way to do it.
+- **`anchor_h50_cw3`** is considered as the recommended variant only if it lowers MDIR by at least 0.03 on both seeds under both conditions, with AUROC within 0.005. It would then also go to seeds 22–26.
+
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
 
 **Step 9 re-scoped (2026-10-18), with reasons.** The list above was written when harm-gated CAGA was the paper's defense. After steps 6d–8, the paper's claims are:

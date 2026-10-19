@@ -266,11 +266,20 @@ CONFIRM = [
     ("03_general", "A Little Is Enough (4 and 6 attackers) and min-max", "drugbank", "random",
      [(CONF9 + " caga", "testB lie6 minmax")], "6 to 7"),
 ]
-SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11", "NC": "17 18 19 20 21"}
-LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method", "NC": "new method confirmation"}
+# Reviewer baselines for anchoring on tuning seeds 10-11 (FedAvg, FLTrust, anchor h50 and server-only h50 are
+# reused from newmethod_01/02): client loss weighting, an enriched FLTrust root, a server fine-tune not fed back.
+BASELINES = [
+    ("01_baselines", "simpler ways to favour high-risk pairs", "drugbank", "random",
+     [("fedavg_cw3 fltrust_cw3 fltrust_rh50 anchor_post_h50 finetune_h50 anchor_h50_cw3", "clean hideHigh4 lie6")],
+     "2 to 2.5"),
+]
+SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11", "NC": "17 18 19 20 21",
+         "RB": "10 11"}
+LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method", "NC": "new method confirmation",
+         "RB": "anchoring baselines"}
 JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
         + [("9", "s9", len(STEP9), *m) for m in STEP9] + [("NM", "nm", len(NEW), *m) for m in NEW]
-        + [("NC", "nc", len(CONFIRM), *m) for m in CONFIRM])
+        + [("NC", "nc", len(CONFIRM), *m) for m in CONFIRM] + [("RB", "rb", len(BASELINES), *m) for m in BASELINES])
 for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     out = f"/kaggle/working/results/{prefix}_{key}"
     n_runs = sum(len(m.split()) * len(a.split()) * len(SEEDS[step].split()) for m, a in blocks)
@@ -282,12 +291,15 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                    "9": "Ablations on tuning seeds 10 and 11, step 7 settings otherwise. ",
                    "NM": "Tuning runs on seeds 10 and 11 (fresh seeds are kept for the confirmation), step 7 settings "
                          "otherwise. ",
-                   "NC": "Confirmation on fresh seeds 17 to 21 (never used before), step 7 settings. "}[step] + f"{n_runs} runs, about "
+                   "NC": "Confirmation on fresh seeds 17 to 21 (never used before), step 7 settings. ",
+                   "RB": "Tuning seeds 10 and 11, step 7 settings; the comparison rows come from the new-method "
+                         "notebooks. "}[step] + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
                else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py" if step == "8"
                else "grep -q '_r05' scripts/gpu_variant_study.py" if step == "9"
+               else "grep -q finetune_h50 scripts/gpu_variant_study.py" if step == "RB"
                else "grep -q '\"server_h50\"' scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
@@ -313,7 +325,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     cells += [md("## 5. Summary table"),
               code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
               md("## 6. Package results"), PACK]
-    name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor"}.get(step, "step" + step)
+    name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor", "RB": "anchor_baselines"}.get(step, "step" + step)
     nbs[f"fedddi_{name}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():

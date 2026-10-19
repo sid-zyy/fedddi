@@ -102,6 +102,17 @@ for _name, _h in (("server_h25", "0.25"), ("server_h50", "0.5")):
                                     "--anchor-high-frac", _h]
 for _m in ("fltrust", "server_h25", "server_h50", "anchor_h25", "anchor_h50"):
     METHODS[f"{_m}_r02"] = METHODS[_m] + ["--root-frac", "0.02"]
+# Reviewer baselines for anchoring (simpler ways to favour high-risk pairs). Weight 3 matches the h50 enrichment:
+# high-risk pairs are ~25% of positives, so 50% enrichment raises their relative weight by (0.75/0.25) = 3.
+# _cw3: honest clients up-weight high-risk positives in their loss; fltrust_rh50: FLTrust's server sample enriched;
+# anchor_post_h50: the anchored model is deployed but not fed back; finetune_h50: the same, uncapped (a plain
+# server fine-tune of each round's FLTrust model).
+METHODS["fedavg_cw3"] = METHODS["fedavg"] + ["--client-high-weight", "3"]
+METHODS["fltrust_cw3"] = METHODS["fltrust"] + ["--client-high-weight", "3"]
+METHODS["fltrust_rh50"] = METHODS["fltrust"] + ["--fltrust-high-frac", "0.5"]
+METHODS["anchor_post_h50"] = METHODS["anchor_h50"] + ["--anchor-feedback", "0"]
+METHODS["finetune_h50"] = METHODS["anchor_h50"][:-2] + ["--anchor-kappa", "1000000", "--anchor-feedback", "0"]
+METHODS["anchor_h50_cw3"] = METHODS["anchor_h50"] + ["--client-high-weight", "3"]
 
 # Step 6 grid (Paper A): harm tolerance x high-risk share of the probe, for both harm modes. Names avoid dots
 # so summarize_variants.py can parse them: t005 = 0.005, h3 = 0.3.
