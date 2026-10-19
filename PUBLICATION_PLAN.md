@@ -580,6 +580,28 @@ New rows:
 - **If one matches**, anchor h50 vs that baseline is confirmed head-to-head on fresh seeds 22–26 under clean, hideHigh4 and lie6 before any wording is fixed. If it still matches there, the claim becomes "train on enriched high-risk data", with anchoring as one way to do it.
 - **`anchor_h50_cw3`** is considered as the recommended variant only if it lowers MDIR by at least 0.03 on both seeds under both conditions, with AUROC within 0.005. It would then also go to seeds 22–26.
 
+**Baselines outcome (2026-10-19): no simpler baseline matches anchoring, and anchoring plus client weighting is better.** All 36 runs complete, no failures (`results/kaggle_main/rb_01_baselines`; analysis `scripts/anchor_baselines_analysis.py`). Validation MDIR minus anchor h50's, clean and hideHigh4, seeds 10/11:
+- **Client weighting alone:** `fltrust_cw3` +0.10 to +0.25 and `fedavg_cw3` +0.15 to +0.32. Client weighting helps FLTrust with no attack (MDIR 0.42–0.49 → 0.22–0.29) but much less under hideHigh4, because the hiders remove the very pairs it up-weights.
+- **Enriched data used only to filter:** `fltrust_rh50` +0.27 to +0.33, almost no gain over FLTrust.
+- **Server step not fed back:** `anchor_post_h50` +0.20 to +0.23 and `finetune_h50` +0.18 to +0.22. AUROC is also 0.018–0.030 lower.
+
+Every baseline's AUROC is 0.018–0.037 below anchoring's. So feeding the enriched server step back every round is what matters. Applying the same step only to the deployed model recovers less than half the MDIR gain, which suggests the benefit compounds as clients train from the anchored model each round.
+
+**`anchor_h50_cw3` passes its "better" rule:** MDIR −0.076/−0.052 (clean) and −0.037/−0.047 (hideHigh4), AUROC +0.001 to +0.004. Under lie6 MDIR is −0.023/−0.054, with AUROC −0.005/−0.002. Low- and moderate-risk recall are equal or higher, except lie6 moderate (−0.04/−0.02).
+
+**Decisions, with reasons:**
+- The claim is the full design: the server's enriched step, fed back every round. Step 10 carries `fltrust_cw3` and `finetune_h50` as baseline rows, as the rule fixed.
+- **`anchor_h50_cw3` goes head-to-head on fresh seeds 22–26** (`fedddi_confirm_cw_01_head_to_head.ipynb`; FLTrust, `fltrust_cw3`, anchor h50 and `anchor_h50_cw3`; clean, hideHigh4 and lie6; 60 runs). Client weighting changes the clients' protocol, not just the server's, and assumes honest clients know their pairs' severity. Both are reasonable for hospitals using a severity-graded interaction source, but they are extra assumptions, so they need their own confirmation.
+
+**Pass criteria for `anchor_h50_cw3`, fixed 2026-10-19 before the runs** (test metrics, last-10-round means, paired over seeds 22–26, 95% t-intervals):
+- **W1:** its MDIR is below anchor h50's under clean and under hideHigh4, with each interval clear of zero.
+- **W2:** its mean AUROC is no more than 0.005 below anchor h50's under clean, hideHigh4 and lie6.
+- **W3:** its mean low- and moderate-risk recall is no more than 0.02 below anchor h50's under clean and hideHigh4.
+
+Outcomes:
+- **W1–W3 pass:** the recommended practice becomes anchoring plus risk-weighted client training. Anchor h50 alone is reported as the server-only-change variant.
+- **Otherwise:** anchor h50 stays the recommendation, and client weighting is reported as a tuning-seed observation.
+
 **Step 9 server-data notebook extended (2026-10-19).** Added anchor h50 and server-only h50 at root shares 0.05 and 0.2 (32 runs; 128 in the notebook). With the existing 0.02 and 0.12 runs, this gives the curve the server-data caveat needs: how anchoring's gain over server-only and over FLTrust changes with the server's share. Descriptive on seeds 10–11. The full-scale check stays in step 10.
 
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).
