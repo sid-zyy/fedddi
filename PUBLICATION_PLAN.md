@@ -616,6 +616,37 @@ Decision, with reason: the rule fixed before the runs says HARBOR alone stays th
 
 **Client weighting on FLTrust (reported):** MDIR −0.151 with no attack, but only −0.066 with 4 hiders, at an AUROC cost of −0.003 to −0.005. This is the same pattern: the benefit shrinks under hiding.
 
+**Newer defenses and adaptive attack: outcomes (2026-10-20).** All 165 runs complete, no failures (`results/kaggle_main/nd_01_defenses`, `ad_01_trust_cone`; analysis `scripts/newdef_adaptive_analysis.py`).
+
+*N1 passes: no newer defense undoes hiding.* Under hideHigh4, MDIR minus FedAvg's:
+- trimmed mean −0.007, centered clipping −0.007, FLAME +0.011;
+- FreqFed +0.019 [+0.000, +0.038] and DnC +0.057 [+0.032, +0.082], which make hiding significantly worse.
+
+The headline "defenses lose their safety advantage under coordinated hiding" now covers ten defenses, including 2021–2024 methods. The filters also exclude honest clients often (DnC 45%, centered clipping 43%, FreqFed 22% of honest client-rounds).
+
+*N2 fails as written; every failure is a collapsed model.* HARBOR has lower MDIR (by 0.26–0.39) and higher AUROC (by 0.025–0.034) than all five newer defenses under clean and hideHigh4, with every interval clear of zero, and under min-max for four of the five. It fails in two places:
+- **lie6:** all five newer defenses collapse to near-random ranking (AUROC 0.51–0.59, against HARBOR's 0.947). They flag about 95% of every test pair, which gives them MDIR 0.02–0.16, below HARBOR's 0.217.
+- **min-max:** FLAME's MDIR difference is not significant (−0.155), and FLAME has collapsed (AUROC 0.643).
+
+Following the rule, the paper reports these cells and explains them. The threshold is fixed at 95% specificity on clean *validation* negatives. A broken model can score test pairs of every kind above it, so its MDIR falls while it flags nearly everything (its low-, moderate- and high-risk recalls are all 0.84–0.98).
+
+**Decision:** MDIR is reported only next to AUROC, and a model whose AUROC is below 0.80 is marked as collapsed in every table, with its MDIR not interpreted. From the next code change on, the pilot also logs test specificity at the threshold, so this case is visible directly.
+
+*Adaptive trust-cone attack (seeds 27–31): A1 and A2 pass; A3 does not trigger the vulnerability statement, but the attack does hurt HARBOR.*
+
+| | Drift only | cone1 | cone5 |
+| --- | --- | --- | --- |
+| HARBOR MDIR / AUROC | 0.155 / 0.960 | 0.227 / 0.955 | 0.205 / 0.957 |
+| FLTrust MDIR / AUROC | 0.434 / 0.934 | 0.548 / 0.925 | 0.562 / 0.927 |
+| FedVal MDIR | 0.438 | 0.517 | 0.517 |
+| FedAvg MDIR | 0.463 | 0.689 | 0.601 |
+
+- **A1 passes.** HARBOR minus FLTrust: −0.321 [−0.382, −0.261] (cone1) and −0.357 [−0.414, −0.299] (cone5). HARBOR minus FedAvg: −0.46 and −0.40. All are 5/5 seeds.
+- **A2 passes:** AUROC +0.029 and +0.030 over FLTrust.
+- **A3: HARBOR's rise is +0.073 [+0.034, +0.111] (cone1) and +0.051 [+0.019, +0.083] (cone5).** Both are below the 0.10 vulnerability line, but both are clearly above zero, and about twice HARBOR's rise under four hiders (+0.035). FLTrust's rise is larger (+0.114 and +0.128) and FedAvg's largest (+0.226 and +0.139).
+
+**Decision:** the paper reports the adaptive attack as the strongest attack on HARBOR. HARBOR stays far safer than every alternative, but an attacker who knows it can raise its MDIR by about 0.05–0.07. "Not a robustness guarantee" stays in the limitations.
+
 **Small-share confirmation and second architecture (2026-10-19), fixed before the runs.**
 
 *2% server share* (`fedddi_share2_01_two_percent.ipynb`; 60 runs; fresh seeds 32–36; clean, hideHigh4 and lie6). Methods: FedAvg, and FLTrust, server-only h50 and HARBOR, all with root fraction 0.02. Reason: the step 9 tuning result ("HARBOR holds at 2%") answers the main reviewer objection only once it is confirmed. Criteria (test metrics, last-10-round means, paired over seeds 32–36, 95% t-intervals):
