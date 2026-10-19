@@ -261,3 +261,41 @@ def test_anchor_correct_caps_the_server_step():
     near = [np.array([1.0, 0.2, 0.0], dtype=np.float32)]
     new, ratio = anchor_correct(old, base, near, kappa=0.5)
     assert np.allclose(new[0], near[0]) and abs(ratio - 0.2) < 1e-6
+
+
+from src.training.robust_aggregation import (  # noqa: E402
+    centered_clip_aggregate, dnc_aggregate, flame_aggregate, freqfed_aggregate,
+)
+
+
+def _two_outliers(seed=0):
+    rng = np.random.default_rng(seed)
+    old = [np.zeros((30, 20), np.float32), np.zeros(15, np.float32)]
+    base = [rng.normal(0, 1, (30, 20)), rng.normal(0, 1, 15)]
+    honest = [[(b + rng.normal(0, 0.3, b.shape)).astype(np.float32) for b in base] for _ in range(8)]
+    bad = [[(-5 * b).astype(np.float32) for b in base] for _ in range(2)]
+    true = np.concatenate([b.ravel() for b in base])
+    return old, honest + bad, true
+
+
+def _err(new, true):
+    return float(np.linalg.norm(np.concatenate([x.ravel() for x in new]) - true) / np.linalg.norm(true))
+
+
+def test_centered_clip_resists_outliers_and_keeps_state():
+    old, arrs, true = _two_outliers()
+    state = {}
+    new, _ = centered_clip_aggregate(old, arrs, state)
+    assert _err(new, true) < 0.3 and "cclip_v" in state
+
+
+def test_dnc_drops_the_outliers():
+    old, arrs, true = _two_outliers()
+    new, r = dnc_aggregate(old, arrs, [1.0] * 10, c=2)
+    assert r.excluded[8] and r.excluded[9] and _err(new, true) < 0.3
+
+
+def test_flame_and_freqfed_exclude_the_outlier_cluster():
+    old, arrs, true = _two_outliers()
+    for new, r in (flame_aggregate(old, arrs), freqfed_aggregate(old, arrs, [1.0] * 10)):
+        assert r.excluded[8] and r.excluded[9] and _err(new, true) < 0.3

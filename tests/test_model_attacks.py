@@ -58,3 +58,19 @@ def test_apply_replaces_only_attackers_and_keeps_shapes():
         apply_model_attack("nope", old, clients, [0], rng)
     with pytest.raises(ValueError):
         apply_model_attack("ipm", old, clients, range(5), rng)
+
+
+def test_trust_cone_update_has_the_requested_cosine_and_norm():
+    from src.training.model_attacks import trust_cone_update
+
+    rng = np.random.default_rng(1)
+    old = [np.zeros(50, np.float32), np.zeros((4, 5), np.float32)]
+    mk = lambda: [rng.normal(0, 1, o.shape).astype(np.float32) for o in old]  # noqa: E731
+    honest, est, sup = mk(), mk(), mk()
+    out = trust_cone_update(old, honest, est, sup, 0.3)
+    flat = lambda x: np.concatenate([a.astype(np.float64).ravel() for a in x])  # noqa: E731
+    o, e, s, h = flat(out), flat(est), flat(sup), flat(honest)
+    assert abs(o @ e / (np.linalg.norm(o) * np.linalg.norm(e)) - 0.3) < 1e-4
+    assert abs(np.linalg.norm(o) - np.linalg.norm(h)) < 1e-3 * np.linalg.norm(h)
+    s_perp = s - (s @ e) / (e @ e) * e
+    assert o @ s_perp > 0  # the rest of the update pushes along the suppression direction

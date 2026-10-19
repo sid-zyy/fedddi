@@ -292,3 +292,126 @@ def anchor_correct(old_arrays: NDArrays, base_arrays: NDArrays, anchored_arrays:
     scale = 1.0 if nd == 0.0 or nd <= kappa * nu else kappa * nu / nd
     new = [(b + scale * x).astype(b.dtype) for b, x in zip(base_arrays, d)]
     return new, (scale * nd / nu if nu > 0 else 0.0)
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Newer baselines (added 2026-10-19): centered clipping, Divide-and-Conquer, FLAME and a FreqFed-style filter.
+# All work on client updates (client - old), flattened per client.
+# ---------------------------------------------------------------------------------------------------------
+
+
+def _update_matrix(old_arrays: NDArrays, client_arrays: List[NDArrays]) -> np.ndarray:
+    return np.stack([_flatten([c.astype(np.float64) - o for c, o in zip(arrs, old_arrays)]) for arrs in client_arrays])
+
+
+def _apply_update(old_arrays: NDArrays, vec: np.ndarray) -> NDArrays:
+    out, i = [], 0
+    for o in old_arrays:
+        out.append((o.astype(np.float64) + vec[i:i + o.size].reshape(o.shape)).astype(o.dtype))
+        i += o.size
+    return out
+
+
+def centered_clip_aggregate(old_arrays: NDArrays, client_arrays: List[NDArrays], state: dict, iters: int = 3,
+                            tau: Optional[float] = None, server_round: int = 0) -> "tuple[NDArrays, SelectionReport]":
+    """Centered clipping (Karimireddy, He and Jaggi, ICML 2021): starting from the previous round's aggregate
+    update v, repeat v <- v + mean_i clip(u_i - v, tau). With tau None the radius is the median distance to v
+    in each iteration (a parameter-free choice). `state['cclip_v']` carries v between rounds."""
+    U = _update_matrix(old_arrays, client_arrays)
+    v = state.get("cclip_v")
+    v = np.zeros(U.shape[1]) if v is None or v.shape[0] != U.shape[1] else v
+    clipped = np.zeros(len(U), dtype=bool)
+    for _ in range(iters):
+        D = U - v
+        dn = np.linalg.norm(D, axis=1)
+        t = float(np.median(dn)) if tau is None else tau
+        scale = np.minimum(1.0, t / np.maximum(dn, 1e-12))
+        clipped = scale < 1.0
+        v = v + (D * scale[:, None]).mean(axis=0)
+    state["cclip_v"] = v
+    return _apply_update(old_arrays, v), SelectionReport("cclip", server_round, clipped.tolist())
+
+
+def dnc_aggregate(old_arrays: NDArrays, client_arrays: List[NDArrays], client_weights: List[float], c: int,
+                  server_round: int = 0, niters: int = 5, sub_dim: int = 10000, filter_frac: float = 1.0,
+                  seed: int = 0) -> "tuple[NDArrays, SelectionReport]":
+    """Divide-and-Conquer (Shejwalkar and Houmansadr, NDSS 2021). In each of `niters` iterations, take a random
+    subset of coordinates, centre the updates, project them on the top right singular vector and drop the
+    filter_frac * c clients with the largest squared projections; average the clients kept in every iteration."""
+    n = len(client_arrays)
+    _check_c(c, n)
+    U = _update_matrix(old_arrays, client_arrays)
+    rng = np.random.default_rng(seed * 1_000_003 + server_round)
+    n_drop = int(round(filter_frac * c))
+    good = set(range(n))
+    scores = np.zeros(n)
+    for _ in range(niters):
+        idx = rng.choice(U.shape[1], size=min(sub_dim, U.shape[1]), replace=False)
+        X = U[:, idx]
+        Xc = X - X.mean(axis=0)
+        top = np.linalg.svd(Xc, full_matrices=False)[2][0]
+        s = (Xc @ top) ** 2
+        scores += s
+        good &= set(np.argsort(s)[: n - n_drop].tolist())
+    keep = sorted(good) or list(range(n))
+    w = np.asarray(client_weights, dtype=np.float64)[keep]
+    agg = (U[keep] * w[:, None]).sum(axis=0) / w.sum()
+    return _apply_update(old_arrays, agg), SelectionReport("dnc", server_round, [i not in good for i in range(n)],
+                                                           (scores / niters).tolist())
+
+
+def _majority_cluster(F: np.ndarray) -> np.ndarray:
+    """HDBSCAN on pairwise cosine distances with min_cluster_size n/2 + 1 (as in FLAME and FreqFed); returns a
+    mask of the largest cluster, or all clients when HDBSCAN marks everyone as noise."""
+    from sklearn.cluster import HDBSCAN
+
+    n = len(F)
+    Fn = F / np.maximum(np.linalg.norm(F, axis=1, keepdims=True), 1e-12)
+    D = np.clip(1.0 - Fn @ Fn.T, 0.0, 2.0)
+    np.fill_diagonal(D, 0.0)
+    labels = HDBSCAN(min_cluster_size=n // 2 + 1, min_samples=1, metric="precomputed",
+                     allow_single_cluster=True).fit(D).labels_
+    ids, counts = np.unique(labels[labels >= 0], return_counts=True)
+    if ids.size == 0:
+        return np.ones(n, dtype=bool)
+    return labels == ids[np.argmax(counts)]
+
+
+def flame_aggregate(old_arrays: NDArrays, client_arrays: List[NDArrays], server_round: int = 0, lam: float = 0.001,
+                    seed: int = 0) -> "tuple[NDArrays, SelectionReport]":
+    """FLAME (Nguyen et al., USENIX Security 2022): keep the majority HDBSCAN cluster of updates (cosine
+    distance), clip the kept updates to the median update norm S of all clients, average, and add Gaussian
+    noise with standard deviation lam * S (lam 0.001, the paper's value for image models)."""
+    U = _update_matrix(old_arrays, client_arrays)
+    keep = _majority_cluster(U)
+    norms = np.linalg.norm(U, axis=1)
+    S = float(np.median(norms))
+    clipped = U[keep] * np.minimum(1.0, S / np.maximum(norms[keep], 1e-12))[:, None]
+    agg = clipped.mean(axis=0)
+    rng = np.random.default_rng(seed * 1_000_033 + server_round)
+    agg = agg + rng.normal(0.0, lam * S, size=agg.shape)
+    return _apply_update(old_arrays, agg), SelectionReport("flame", server_round, (~keep).tolist(), norms.tolist())
+
+
+def _low_freq(old_arrays: NDArrays, arrs: NDArrays, frac: float) -> np.ndarray:
+    from scipy.fft import dct
+
+    parts = []
+    for c, o in zip(arrs, old_arrays):
+        v = (c.astype(np.float64) - o).reshape(-1)
+        k = max(1, int(np.ceil(frac * v.size)))
+        parts.append(dct(v, type=2, norm="ortho")[:k])
+    return np.concatenate(parts)
+
+
+def freqfed_aggregate(old_arrays: NDArrays, client_arrays: List[NDArrays], client_weights: List[float],
+                      server_round: int = 0, frac: float = 0.25) -> "tuple[NDArrays, SelectionReport]":
+    """FreqFed-style filter (after Fereidooni et al., NDSS 2024): describe each update by the low-frequency
+    share `frac` of the DCT-II of every parameter tensor (a 1-D simplification of the paper's 2-D per-layer
+    DCT), keep the majority HDBSCAN cluster by cosine distance, and average the kept clients' updates."""
+    F = np.stack([_low_freq(old_arrays, arrs, frac) for arrs in client_arrays])
+    keep = _majority_cluster(F)
+    U = _update_matrix(old_arrays, client_arrays)
+    w = np.asarray(client_weights, dtype=np.float64)[keep]
+    agg = (U[keep] * w[:, None]).sum(axis=0) / w.sum()
+    return _apply_update(old_arrays, agg), SelectionReport("freqfed", server_round, (~keep).tolist())

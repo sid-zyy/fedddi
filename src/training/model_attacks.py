@@ -83,3 +83,20 @@ def apply_model_attack(kind: str, old: NDArrays, client_arrays: List[NDArrays], 
     honest = np.stack([_flat(old, client_arrays[k]) for k in honest_ids])
     for k in attackers:
         client_arrays[k] = _unflat(old, malicious_update(kind, honest, _flat(old, client_arrays[k]), rng, eps, scale))
+
+
+def trust_cone_update(old: NDArrays, honest_arrays: NDArrays, server_est_arrays: NDArrays, suppress_arrays: NDArrays,
+                      cos: float) -> NDArrays:
+    """Adaptive attack against HARBOR and other server-referenced defenses (FLTrust's trust is ReLU(cosine)
+    with the server update, and its weight ignores norm). The attacker estimates the server's update by
+    training on its own data with high-risk pairs up-weighted (mimicking the server's enrichment) and builds a
+    suppression direction by training its high-risk pairs as negatives. It sends the update with cosine `cos`
+    to the server estimate whose remaining component points along the suppression direction (orthogonalised),
+    scaled to its honest update's norm: as much suppression as possible while staying inside the trust cone."""
+    if not 0.0 < cos < 1.0:
+        raise ValueError("cos must be in (0, 1)")
+    h, e, s = (_flat(old, x) for x in (honest_arrays, server_est_arrays, suppress_arrays))
+    u = e / max(float(np.linalg.norm(e)), 1e-12)
+    w = s - float(s @ u) * u
+    w = w / max(float(np.linalg.norm(w)), 1e-12)
+    return _unflat(old, (cos * u + np.sqrt(1.0 - cos * cos) * w) * float(np.linalg.norm(h)))

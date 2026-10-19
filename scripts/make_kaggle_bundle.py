@@ -43,7 +43,7 @@ def RUN(methods, attacks):
                 f"--methods {methods} --attacks {attacks} --device cuda --parallel 3 --out /kaggle/working/results/paperA_count")
 
 
-PIP = 'pip install -q torch-geometric ogb "flwr[simulation]>=1.10" hydra-core omegaconf'
+PIP = 'pip install -q torch-geometric ogb "flwr[simulation]>=1.10" hydra-core omegaconf "scikit-learn>=1.3"'
 PACK = code(NL.join(["import shutil", "shutil.make_archive('/kaggle/working/results', 'zip', '/kaggle/working/results')",
                      "print('Download results.zip from the Output tab')"]))
 def stage(name): return bash(f"cd /kaggle/working/fedddi && bash scripts/kaggle_gpu_checks.sh {name}")
@@ -279,14 +279,27 @@ CONFIRM_CW = [
     ("01_head_to_head", "anchoring with and without client high-risk weighting", "drugbank", "random",
      [("fltrust fltrust_cw3 anchor_h50 anchor_h50_cw3", "clean hideHigh4 lie6")], "2.5 to 3"),
 ]
+# Newer defenses on the HARBOR confirmation seeds (17-21), joining that table; and an adaptive attacker built
+# against HARBOR on fresh seeds 27-31 (criteria in PUBLICATION_PLAN.md).
+NEWDEF = [
+    ("01_defenses", "trimmed mean, centered clipping, DnC, FLAME, FreqFed", "drugbank", "random",
+     [("trimmed cclip dnc flame freqfed", "clean hideHigh4 lie6 minmax")], "3 to 4"),
+]
+ADAPT = [
+    ("01_trust_cone", "an adaptive attacker built against HARBOR", "drugbank", "random",
+     [("fedavg fltrust fedval anchor_h50", "drift cone1 cone5"), ("server_h50", "drift")], "3 to 3.5"),
+]
 SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11", "NC": "17 18 19 20 21",
-         "RB": "10 11", "CW": "22 23 24 25 26"}
+         "RB": "10 11", "CW": "22 23 24 25 26", "ND": "17 18 19 20 21",
+         "AD": "27 28 29 30 31"}
 LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method", "NC": "new method confirmation",
-         "RB": "anchoring baselines", "CW": "client-weighting confirmation"}
+         "RB": "anchoring baselines", "CW": "client-weighting confirmation",
+         "ND": "newer defenses", "AD": "adaptive attack on HARBOR"}
 JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
         + [("9", "s9", len(STEP9), *m) for m in STEP9] + [("NM", "nm", len(NEW), *m) for m in NEW]
         + [("NC", "nc", len(CONFIRM), *m) for m in CONFIRM] + [("RB", "rb", len(BASELINES), *m) for m in BASELINES]
-        + [("CW", "cw", len(CONFIRM_CW), *m) for m in CONFIRM_CW])
+        + [("CW", "cw", len(CONFIRM_CW), *m) for m in CONFIRM_CW]
+        + [("ND", "nd", len(NEWDEF), *m) for m in NEWDEF] + [("AD", "ad", len(ADAPT), *m) for m in ADAPT])
 for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     out = f"/kaggle/working/results/{prefix}_{key}"
     n_runs = sum(len(m.split()) * len(a.split()) * len(SEEDS[step].split()) for m, a in blocks)
@@ -301,12 +314,16 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                    "NC": "Confirmation on fresh seeds 17 to 21 (never used before), step 7 settings. ",
                    "RB": "Tuning seeds 10 and 11, step 7 settings; the comparison rows come from the new-method "
                          "notebooks. ",
-                   "CW": "Confirmation on fresh seeds 22 to 26 (never used before), step 7 settings. "}[step] + f"{n_runs} runs, about "
+                   "CW": "Confirmation on fresh seeds 22 to 26 (never used before), step 7 settings. ",
+                   "ND": "Seeds 17 to 21 (the HARBOR confirmation seeds, so the rows join that table), step 7 "
+                         "settings. ",
+                   "AD": "Fresh seeds 27 to 31 (never used before), step 7 settings. "}[step] + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
                else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py" if step == "8"
                else "grep -q finetune_h50 scripts/gpu_variant_study.py" if step in ("9", "RB", "CW")
+               else "grep -q trust-cone-cos scripts/cpu_pilot.py" if step in ("ND", "AD")
                else "grep -q '\"server_h50\"' scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
@@ -332,7 +349,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     cells += [md("## 5. Summary table"),
               code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
               md("## 6. Package results"), PACK]
-    name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor", "RB": "anchor_baselines", "CW": "confirm_cw"}.get(step, "step" + step)
+    name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor", "RB": "anchor_baselines", "CW": "confirm_cw", "ND": "newdefenses", "AD": "adaptive_harbor"}.get(step, "step" + step)
     nbs[f"fedddi_{name}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():

@@ -616,6 +616,35 @@ Decision, with reason: the rule fixed before the runs says HARBOR alone stays th
 
 **Client weighting on FLTrust (reported):** MDIR −0.151 with no attack, but only −0.066 with 4 hiders, at an AUROC cost of −0.003 to −0.005. This is the same pattern: the benefit shrinks under hiding.
 
+**Newer defenses and an adaptive attacker against HARBOR (2026-10-19), fixed before the runs.**
+
+Reason: the newest baseline so far is FLTrust (2021), and no attacker had been built against HARBOR itself. These are the two most likely reviewer objections after the server-data question.
+
+*Newer defenses* (`fedddi_newdefenses_01_defenses.ipynb`; 100 runs; seeds 17–21, so the rows join the HARBOR confirmation table; clean, hideHigh4, lie6, min-max):
+- **Trimmed mean** (already in the code; 20% each side).
+- **Centered clipping** (ICML 2021): 3 iterations from the previous aggregate update, radius = median distance.
+- **Divide-and-Conquer** (NDSS 2021): 5 iterations, 10k random coordinates, drops c clients per iteration (true count).
+- **FLAME** (USENIX Security 2022): HDBSCAN majority cluster on cosine distance of updates, median-norm clipping, noise λ = 0.001.
+- **FreqFed-style** (after NDSS 2024): HDBSCAN on the low-frequency quarter of each parameter tensor's 1-D DCT. This is a simplification of the paper's 2-D per-layer DCT, and is reported as such.
+
+Unit tests check that each one removes or limits two outlier clients on synthetic data.
+
+*Analysis, fixed now:*
+- **N1 (benchmark claim):** under hideHigh4, no newer defense has an MDIR lower than FedAvg's by more than 0.03 (paired, seeds 17–21; FedAvg from `nc_01_core`). If one does, the claim "defenses lose their safety advantage under hiding" is narrowed to the defenses that fail, and that defense is named.
+- **N2 (HARBOR vs the newer defenses):** HARBOR's test MDIR is lower than each newer defense's under all four conditions, and its AUROC is no more than 0.005 below, with every MDIR interval clear of zero. If one fails, the paper reports where HARBOR does not lead.
+
+*Adaptive attacker* (`fedddi_adaptive_harbor_01_trust_cone.ipynb`; 65 runs; fresh seeds 27–31; presets `cone1` and `cone5`). Four attackers (clients 0, 1, 4 and 5, as in test B; severe drift on 2 and 3) from round 12. Each attacker:
+- estimates the server's enriched update by training on its own data with high-risk positives weighted ×3;
+- builds a suppression direction by training its own high-risk pairs as negatives;
+- sends the update whose cosine with the estimate is 0.1 or 0.5, with the rest pointing along the orthogonalised suppression direction, at its honest update's norm.
+
+This maximises damage to high-risk recall while staying inside FLTrust's trust cone (trust = ReLU(cosine), norm-free). HARBOR has no gate of its own, so this is the strongest attacker we can build against its FLTrust base plus enriched anchor. The CPU smoke run confirmed the attack can collapse FLTrust (AUROC about 0.49 after one attacked round) while HARBOR held. Methods: FedAvg, FLTrust, FedVal and HARBOR under drift only, cone1 and cone5, plus server-only under drift.
+
+*Criteria, fixed now* (test metrics, last-10-round means, paired over seeds 27–31, 95% t-intervals):
+- **A1:** under each cone attack, HARBOR's MDIR is lower than FLTrust's and FedAvg's, with each interval clear of zero.
+- **A2:** under each cone attack, HARBOR's AUROC is no more than 0.005 below FLTrust's.
+- **A3 (vulnerability statement):** HARBOR's attack-induced MDIR rise (cone minus drift) is reported. If it exceeds 0.10 under either strength, the paper states that HARBOR is vulnerable to an adaptive attacker with that rise, regardless of A1 and A2.
+
 **Step 9 server-data notebook extended (2026-10-19).** Added anchor h50 and server-only h50 at root shares 0.05 and 0.2 (32 runs; 128 in the notebook). With the existing 0.02 and 0.12 runs, this gives the curve the server-data caveat needs: how anchoring's gain over server-only and over FLTrust changes with the server's share. Descriptive on seeds 10–11. The full-scale check stays in step 10.
 
 **Step 9: ablations (seeds 10–11 are enough).** Risk weighting off; harm gate off (plain CAGA); secret probe off; warm-up 0 (it collapsed on DrugBank before); probe size 1000/4000/8000; root fraction 0.05/0.12/0.2; block gating on; class-aware and reputation variants (negative results).

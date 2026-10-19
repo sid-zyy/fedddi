@@ -57,6 +57,11 @@ METHODS = {
     "krum": ["--method", "krum"],
     "median": ["--method", "median"],
     "trimmed": ["--method", "trimmed"],
+    # Newer baselines (2026-10-19): centered clipping, Divide-and-Conquer (true attacker count), FLAME, FreqFed.
+    "cclip": ["--method", "cclip"],
+    "dnc": ["--method", "dnc"],
+    "flame": ["--method", "flame"],
+    "freqfed": ["--method", "freqfed"],
 }
 # Harm reputation (step 6d): solo harm, running mean per client, gated above (1 + delta) x the median
 # client's; no cross-client calibration; cap-only final check.
@@ -155,6 +160,10 @@ ATTACKS = {
     # estimated harm under the harm-reputation limit, estimated on their own data or on the server's probe
     # (the latter only against a defense without a secret probe).
     "lie6": ["--cond", "drift", "--lie-clients", "0", "1", "4", "5", "6", "7", "--lie-z", "0.84"],
+    # Adaptive attack against HARBOR (2026-10-19): 4 attackers (as in test B) send high-risk-suppressing updates
+    # inside FLTrust's trust cone, at cosine 0.1 (maximal suppression) or 0.5 (more trust weight).
+    **{f"cone{c}": ["--cond", "drift", "--model-attack-clients", "0", "1", "4", "5", "--trust-cone-cos", f"0.{c}"]
+       for c in ("1", "5")},
     "onoff4": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5",
                "--on-off", "12-20,30-40"],
     "adaptive4": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5", "--adaptive-hide"],

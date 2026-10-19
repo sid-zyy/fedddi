@@ -50,6 +50,8 @@ class Trainer:
         self.run_id = run_id
         # Optional per-positive loss weights (edges -> weights), e.g. to up-weight high-risk pairs.
         self.pos_weight_fn = None
+        # Optional per-positive targets (edges -> 0/1), e.g. an attacker training its high-risk pairs as negatives.
+        self.pos_target_fn = None
 
 
         _perf = cfg.get("perf", None) if hasattr(cfg, "get") else None
@@ -166,12 +168,14 @@ class Trainer:
                 h[src_n], h[dst_n], d_u_n, d_v_n
             )
 
+            y_p = torch.ones_like(logits_p)
+            if self.pos_target_fn is not None:
+                y_p = self.pos_target_fn(pos_batch).to(logits_p.device, logits_p.dtype).reshape(logits_p.shape)
             if self.pos_weight_fn is not None:
                 w = self.pos_weight_fn(pos_batch).to(logits_p.device, logits_p.dtype).reshape(logits_p.shape)
-                loss_p = (F.binary_cross_entropy_with_logits(
-                    logits_p, torch.ones_like(logits_p), reduction="none") * w).sum() / w.sum()
+                loss_p = (F.binary_cross_entropy_with_logits(logits_p, y_p, reduction="none") * w).sum() / w.sum()
             else:
-                loss_p = F.binary_cross_entropy_with_logits(logits_p, torch.ones_like(logits_p))
+                loss_p = F.binary_cross_entropy_with_logits(logits_p, y_p)
             loss = loss_p + F.binary_cross_entropy_with_logits(logits_n, torch.zeros_like(logits_n))
 
 

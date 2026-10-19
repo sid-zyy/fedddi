@@ -43,15 +43,16 @@ from src.training.evaluate import score_edges  # noqa: E402
 from src.training.fl_client import FedDDIClient  # noqa: E402
 from src.training.fltrust import fltrust_aggregate  # noqa: E402
 from src.training.robust_aggregation import (  # noqa: E402
-    anchor_correct, clip_and_average, err_aggregate, fedval_aggregate, krum_aggregate, lfr_aggregate,
+    anchor_correct, centered_clip_aggregate, clip_and_average, dnc_aggregate, err_aggregate, flame_aggregate,
+    freqfed_aggregate, fedval_aggregate, krum_aggregate, lfr_aggregate,
     median_aggregate, probe_auroc_error, trimmed_mean_aggregate, zeno_aggregate)
 from src.training import safety_metrics as sm  # noqa: E402
-from src.training.model_attacks import ATTACKS as MODEL_ATTACKS, apply_model_attack  # noqa: E402
+from src.training.model_attacks import ATTACKS as MODEL_ATTACKS, apply_model_attack, trust_cone_update  # noqa: E402
 from src.training.trainer import build_client_trainer  # noqa: E402
 from src.utils.utils import seed_everything  # noqa: E402
 
 METHODS = ("fedavg", "fedavg_root", "normclip", "fltrust", "caga", "caga_noblock",
-           "lfr", "err", "zeno", "krum", "median", "trimmed", "fedval", "anchor")
+           "lfr", "err", "zeno", "krum", "median", "trimmed", "fedval", "anchor", "cclip", "dnc", "flame", "freqfed")
 # Methods that reserve clean server ("root") edges: CAGA and FLTrust train or probe on them; LFR, ERR
 # and Zeno score candidates on the same probe CAGA uses.
 # FedVal scores clients per risk class of the same probe; the risk-anchored method trains on root edges.
@@ -92,6 +93,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model-attack", choices=MODEL_ATTACKS, default=None,
                    help="Replace --model-attack-clients' updates from --attack-start on (step 7 attacks).")
     p.add_argument("--model-attack-clients", type=int, nargs="*", default=[])
+    p.add_argument("--trust-cone-cos", type=float, default=None,
+                   help="Adaptive attack against HARBOR/FLTrust: --model-attack-clients send a high-risk-suppressing "
+                        "update at this cosine to their estimate of the server's (risk-enriched) update.")
     p.add_argument("--ipm-eps", type=float, default=0.5)
     p.add_argument("--gauss-scale", type=float, default=1.0)
     p.add_argument("--on-off", default=None,
@@ -351,7 +355,9 @@ def main() -> None:
     edge_risk = None
     if (a.client_high_weight != 1.0 or a.fltrust_high_frac is not None) and not has_risk:
         raise SystemExit("--client-high-weight and --fltrust-high-frac need risk labels (DrugBank)")
-    if a.hide_high or a.fabricate_high or a.client_high_weight != 1.0:
+    if a.trust_cone_cos is not None and not has_risk:
+        raise SystemExit("--trust-cone-cos needs risk labels (DrugBank)")
+    if a.hide_high or a.fabricate_high or a.client_high_weight != 1.0 or a.trust_cone_cos is not None:
         from src.data.drugbank import edge_risk_lookup
         edge_risk = edge_risk_lookup(os.path.join(a.data, "drugbank"))
     cfg = make_cfg(a, os.path.join(out_dir, "ckpt"))
@@ -396,6 +402,12 @@ def main() -> None:
             clients[i].trainer.pos_weight_fn = w_fn
     if a.model_attack and not a.model_attack_clients:
         raise SystemExit("--model-attack needs --model-attack-clients")
+    if a.trust_cone_cos is not None and (not a.model_attack_clients or a.model_attack):
+        raise SystemExit("--trust-cone-cos needs --model-attack-clients and no --model-attack")
+    if a.trust_cone_cos is not None:
+        cone_index = RiskIndex(edge_risk)
+        cone_enrich = lambda e: torch.from_numpy(np.where(cone_index.risk_of(e) == 2, 3.0, 1.0))  # noqa: E731
+        cone_flip = lambda e: torch.from_numpy(np.where(cone_index.risk_of(e) == 2, 0.0, 1.0))  # noqa: E731
     if a.adaptive_hide and not a.hide_high:
         raise SystemExit("--adaptive-hide needs --hide-high")
     if a.adaptive_knows_probe and a.caga_secret_probe:
@@ -454,6 +466,17 @@ def main() -> None:
         if a.model_attack and rnd >= a.attack_start:
             apply_model_attack(a.model_attack, params, client_arrays, a.model_attack_clients, attack_rng,
                                eps=a.ipm_eps, scale=a.gauss_scale)
+        if a.trust_cone_cos is not None and rnd >= a.attack_start:
+            # Each attacker estimates the server's enriched update and a high-risk suppression direction on
+            # its own data (two extra local fits), then stays inside the trust cone (model_attacks.py).
+            for i in a.model_attack_clients:
+                tr = clients[i].trainer
+                tr.pos_weight_fn = cone_enrich
+                est = list(clients[i].fit(params, {"server_round": rnd})[0])
+                tr.pos_weight_fn, tr.pos_target_fn = None, cone_flip
+                sup = list(clients[i].fit(params, {"server_round": rnd})[0])
+                tr.pos_target_fn = None
+                client_arrays[i] = trust_cone_update(params, client_arrays[i], est, sup, a.trust_cone_cos)
         weights = [float(f[1]) for f in fits]
         row: Dict[str, Any] = {"round": rnd, "train_loss": float(np.mean([f[2]["loss"] for f in fits])),
                                "client_losses": json.dumps([round(float(f[2]["loss"]), 4) for f in fits])}
@@ -599,6 +622,19 @@ def main() -> None:
                 new, _ = median_aggregate(arrs, rnd)
             elif a.method == "trimmed":
                 new, _ = trimmed_mean_aggregate(arrs, a.trim, rnd)
+            elif a.method == "cclip":
+                new, r = centered_clip_aggregate(params, arrs, state, server_round=rnd)
+                excluded = r.excluded
+            elif a.method == "dnc":
+                new, r = dnc_aggregate(params, arrs, w, byz_c, rnd, seed=a.seed)
+                fields["dnc_score"] = json.dumps([round(v, 5) for v in r.scores])
+                excluded = r.excluded
+            elif a.method == "flame":
+                new, r = flame_aggregate(params, arrs, rnd, seed=a.seed)
+                excluded = r.excluded
+            elif a.method == "freqfed":
+                new, r = freqfed_aggregate(params, arrs, w, rnd)
+                excluded = r.excluded
             else:
                 new, r = caga_round(params, arrs, [str(i) for i in idx], w, block_map, loss_fn, hp, rnd,
                                     sample_weights=[sw[i] for i in idx] if sw is not None else None, state=state,
