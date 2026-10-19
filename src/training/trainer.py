@@ -376,6 +376,7 @@ def build_client_trainer(
         dropout=cfg.model.dropout,
         normalize=cfg.model.normalize,
         node_features=node_features,
+        conv=cfg.model.get("conv", "sage") if hasattr(cfg.model, "get") else "sage",
     ).to(device)
 
     predictor = NeuralLinkPredictor(

@@ -110,6 +110,9 @@ for _m in ("fltrust", "server_h25", "server_h50", "anchor_h25", "anchor_h50"):
 for _m in ("server_h50", "anchor_h50"):
     METHODS[f"{_m}_r05"] = METHODS[_m] + ["--root-frac", "0.05"]
     METHODS[f"{_m}_r20"] = METHODS[_m] + ["--root-frac", "0.2"]
+# Second architecture (2026-10-19): the same methods with GCN layers instead of GraphSAGE, settings unchanged.
+for _m in ("fedavg", "fltrust", "server_h50", "anchor_h50"):
+    METHODS[f"{_m}_gcn"] = METHODS[_m] + ["--conv", "gcn"]
 # Reviewer baselines for anchoring (simpler ways to favour high-risk pairs). Weight 3 matches the h50 enrichment:
 # high-risk pairs are ~25% of positives, so 50% enrichment raises their relative weight by (0.75/0.25) = 3.
 # _cw3: honest clients up-weight high-risk positives in their loss; fltrust_rh50: FLTrust's server sample enriched;

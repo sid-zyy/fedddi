@@ -93,6 +93,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model-attack", choices=MODEL_ATTACKS, default=None,
                    help="Replace --model-attack-clients' updates from --attack-start on (step 7 attacks).")
     p.add_argument("--model-attack-clients", type=int, nargs="*", default=[])
+    p.add_argument("--conv", choices=("sage", "gcn"), default="sage",
+                   help="Encoder layers: GraphSAGE (default) or GCN (the second architecture).")
     p.add_argument("--trust-cone-cos", type=float, default=None,
                    help="Adaptive attack against HARBOR/FLTrust: --model-attack-clients send a high-risk-suppressing "
                         "update at this cosine to their estimate of the server's (risk-enriched) update.")
@@ -177,7 +179,7 @@ def parse_args() -> argparse.Namespace:
 def make_cfg(a: argparse.Namespace, save_dir: str) -> Any:
     return OmegaConf.create({
         "dataset": {"num_anchors": 0},
-        "model": {"hidden_dim": a.hidden, "num_layers": 2, "dropout": 0.3, "normalize": False},
+        "model": {"hidden_dim": a.hidden, "num_layers": 2, "dropout": 0.3, "normalize": False, "conv": a.conv},
         "predictor": {"hidden_dim": a.hidden, "num_layers": 3, "dropout": 0.3},
         "training": {"batch_size": a.batch_size, "num_neg_samples": 1, "lr": a.lr, "weight_decay": 0.0,
                      "epochs": 1, "save_dir": save_dir, "grad_clip": 1.0},

@@ -1,11 +1,11 @@
-"""GraphSAGE encoder for ogbl-ddi"""
+"""GraphSAGE encoder for ogbl-ddi (conv="gcn" swaps in GCN layers, the second architecture for Paper A)"""
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import SAGEConv  # type: ignore
+from torch_geometric.nn import GCNConv, SAGEConv  # type: ignore
 
 
 class GraphSAGEEncoder(nn.Module):
@@ -19,6 +19,7 @@ class GraphSAGEEncoder(nn.Module):
         dropout: float = 0.3,
         normalize: bool = False,
         node_features: torch.Tensor | None = None,
+        conv: str = "sage",
     ) -> None:
         super().__init__()
 
@@ -27,6 +28,9 @@ class GraphSAGEEncoder(nn.Module):
         self.num_layers = num_layers
         self.dropout = dropout
         self.normalize = normalize
+        if conv not in ("sage", "gcn"):
+            raise ValueError(f"unknown conv {conv!r}")
+        self.conv = conv
 
         if node_features is not None:
 
@@ -56,7 +60,7 @@ class GraphSAGEEncoder(nn.Module):
 
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
-            self.convs.append(SAGEConv(hidden_dim, hidden_dim))
+            self.convs.append(SAGEConv(hidden_dim, hidden_dim) if conv == "sage" else GCNConv(hidden_dim, hidden_dim))
 
 
 
@@ -80,10 +84,22 @@ class GraphSAGEEncoder(nn.Module):
         deg = A.sum(dim=1, keepdim=True).clamp_(min=1.0)
         return A / deg
 
+    @staticmethod
+    def build_dense_gcn_adj(edge_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
+        """Symmetric-normalised dense adjacency with self-loops, D^-1/2 (A + I) D^-1/2 (as GCNConv computes)."""
+        A = torch.zeros(num_nodes, num_nodes, device=edge_index.device, dtype=torch.float32)
+        A.index_put_((edge_index[1], edge_index[0]),
+                     torch.ones(edge_index.size(1), device=edge_index.device, dtype=torch.float32),
+                     accumulate=True)
+        A.fill_diagonal_(1.0)  # one self-loop per node, as add_remaining_self_loops keeps
+        d = A.sum(dim=1).pow(-0.5)
+        return d[:, None] * A * d[None, :]
+
     def _get_dense_adj(self, edge_index: torch.Tensor) -> torch.Tensor:
         key = (edge_index.data_ptr(), tuple(edge_index.shape), str(edge_index.device))
         if self._dense_adj_cache is None or self._dense_adj_cache[0] != key:
-            self._dense_adj_cache = (key, self.build_dense_mean_adj(edge_index, self.num_nodes))
+            build = self.build_dense_mean_adj if self.conv == "sage" else self.build_dense_gcn_adj
+            self._dense_adj_cache = (key, build(edge_index, self.num_nodes))
         return self._dense_adj_cache[1]
 
     def _reset_parameters(self) -> None:
@@ -103,10 +119,13 @@ class GraphSAGEEncoder(nn.Module):
             node_ids = torch.arange(self.num_nodes, device=edge_index.device)
             h = self.embedding(node_ids)
 
-        dense = self.use_dense_adj and all(hasattr(c, "lin_l") and hasattr(c, "lin_r") for c in self.convs)
+        dense = self.use_dense_adj and (self.conv == "gcn" or all(hasattr(c, "lin_l") and hasattr(c, "lin_r")
+                                                                  for c in self.convs))
         A = self._get_dense_adj(edge_index) if dense else None
         for i, conv in enumerate(self.convs):
-            if dense:
+            if dense and self.conv == "gcn":
+                h = A @ conv.lin(h) + conv.bias
+            elif dense:
 
                 h = conv.lin_l(A @ h) + conv.lin_r(h)
             else:

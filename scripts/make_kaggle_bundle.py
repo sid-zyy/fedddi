@@ -289,17 +289,29 @@ ADAPT = [
     ("01_trust_cone", "an adaptive attacker built against HARBOR", "drugbank", "random",
      [("fedavg fltrust fedval anchor_h50", "drift cone1 cone5"), ("server_h50", "drift")], "3 to 3.5"),
 ]
+# Small server share confirmed on fresh seeds 32-36, and the second architecture (GCN) on the HARBOR
+# confirmation seeds 17-21 (criteria in PUBLICATION_PLAN.md).
+SHARE2 = [
+    ("01_two_percent", "HARBOR with a 2% server share", "drugbank", "random",
+     [("fedavg fltrust_r02 server_h50_r02 anchor_h50_r02", "clean hideHigh4 lie6")], "2 to 2.5"),
+]
+GCN = [
+    ("01_gcn", "the same comparison with GCN layers", "drugbank", "random",
+     [("fedavg_gcn fltrust_gcn server_h50_gcn anchor_h50_gcn", "clean hideHigh4 lie6")], "2 to 2.5"),
+]
 SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11", "NC": "17 18 19 20 21",
          "RB": "10 11", "CW": "22 23 24 25 26", "ND": "17 18 19 20 21",
-         "AD": "27 28 29 30 31"}
+         "AD": "27 28 29 30 31", "S2": "32 33 34 35 36", "GC": "17 18 19 20 21"}
 LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method", "NC": "new method confirmation",
          "RB": "anchoring baselines", "CW": "client-weighting confirmation",
-         "ND": "newer defenses", "AD": "adaptive attack on HARBOR"}
+         "ND": "newer defenses", "AD": "adaptive attack on HARBOR",
+         "S2": "small server share confirmation", "GC": "second architecture"}
 JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
         + [("9", "s9", len(STEP9), *m) for m in STEP9] + [("NM", "nm", len(NEW), *m) for m in NEW]
         + [("NC", "nc", len(CONFIRM), *m) for m in CONFIRM] + [("RB", "rb", len(BASELINES), *m) for m in BASELINES]
         + [("CW", "cw", len(CONFIRM_CW), *m) for m in CONFIRM_CW]
-        + [("ND", "nd", len(NEWDEF), *m) for m in NEWDEF] + [("AD", "ad", len(ADAPT), *m) for m in ADAPT])
+        + [("ND", "nd", len(NEWDEF), *m) for m in NEWDEF] + [("AD", "ad", len(ADAPT), *m) for m in ADAPT]
+        + [("S2", "s2", len(SHARE2), *m) for m in SHARE2] + [("GC", "gc", len(GCN), *m) for m in GCN])
 for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     out = f"/kaggle/working/results/{prefix}_{key}"
     n_runs = sum(len(m.split()) * len(a.split()) * len(SEEDS[step].split()) for m, a in blocks)
@@ -317,13 +329,17 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                    "CW": "Confirmation on fresh seeds 22 to 26 (never used before), step 7 settings. ",
                    "ND": "Seeds 17 to 21 (the HARBOR confirmation seeds, so the rows join that table), step 7 "
                          "settings. ",
-                   "AD": "Fresh seeds 27 to 31 (never used before), step 7 settings. "}[step] + f"{n_runs} runs, about "
+                   "AD": "Fresh seeds 27 to 31 (never used before), step 7 settings. ",
+                   "S2": "Fresh seeds 32 to 36 (never used before), step 7 settings with a 2% server share. ",
+                   "GC": "Seeds 17 to 21 (paired with the GraphSAGE confirmation), step 7 settings with GCN "
+                         "layers. "}[step] + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
                else "grep -q harm_rep_d2_open scripts/gpu_variant_study.py" if step == "8"
                else "grep -q finetune_h50 scripts/gpu_variant_study.py" if step in ("9", "RB", "CW")
                else "grep -q trust-cone-cos scripts/cpu_pilot.py" if step in ("ND", "AD")
+               else "grep -q build_dense_gcn_adj src/models/encoder.py" if step in ("S2", "GC")
                else "grep -q '\"server_h50\"' scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
@@ -349,7 +365,8 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     cells += [md("## 5. Summary table"),
               code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
               md("## 6. Package results"), PACK]
-    name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor", "RB": "anchor_baselines", "CW": "confirm_cw", "ND": "newdefenses", "AD": "adaptive_harbor"}.get(step, "step" + step)
+    name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor", "RB": "anchor_baselines", "CW": "confirm_cw", "ND": "newdefenses", "AD": "adaptive_harbor", "S2": "share2",
+            "GC": "gcn"}.get(step, "step" + step)
     nbs[f"fedddi_{name}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():

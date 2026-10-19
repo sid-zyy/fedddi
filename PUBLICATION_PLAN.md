@@ -616,6 +616,22 @@ Decision, with reason: the rule fixed before the runs says HARBOR alone stays th
 
 **Client weighting on FLTrust (reported):** MDIR −0.151 with no attack, but only −0.066 with 4 hiders, at an AUROC cost of −0.003 to −0.005. This is the same pattern: the benefit shrinks under hiding.
 
+**Small-share confirmation and second architecture (2026-10-19), fixed before the runs.**
+
+*2% server share* (`fedddi_share2_01_two_percent.ipynb`; 60 runs; fresh seeds 32–36; clean, hideHigh4 and lie6). Methods: FedAvg, and FLTrust, server-only h50 and HARBOR, all with root fraction 0.02. Reason: the step 9 tuning result ("HARBOR holds at 2%") answers the main reviewer objection only once it is confirmed. Criteria (test metrics, last-10-round means, paired over seeds 32–36, 95% t-intervals):
+- **S1:** at 2%, HARBOR's MDIR is below FLTrust's and below server-only's under clean and hideHigh4, with each interval clear of zero.
+- **S2:** at 2%, HARBOR's AUROC is no more than 0.005 below FLTrust's under every attack, and no more than 0.005 below FedAvg's (no server data) under clean.
+- **Reported:** lie6 HARBOR vs server-only, where the tuning margin was small (−0.025).
+
+Outcome rule: if S1 and S2 pass, the paper states that HARBOR works with a 2% trusted share. If not, the small-share claim stays a tuning-seed observation.
+
+*Second architecture* (`fedddi_gcn_01_gcn.ipynb`; 60 runs; seeds 17–21, paired with the GraphSAGE confirmation; clean, hideHigh4 and lie6). The same FedAvg, FLTrust, server-only h50 and HARBOR with GCN layers (`--conv gcn`), with all settings unchanged and HARBOR not re-tuned. Reason: a reviewer will ask whether the results are specific to GraphSAGE. GAT was not used: attention over about a million DrugBank edges is too heavy for three parallel runs on a T4. A unit test checks that the pilot's dense GCN matches PyG's GCNConv. Criteria (as above, seeds 17–21):
+- **G1:** with GCN, HARBOR's MDIR is below FLTrust's and below server-only's under clean and hideHigh4, with each interval clear of zero.
+- **G2:** with GCN, HARBOR's AUROC is no more than 0.005 below FLTrust's under every attack.
+- **Reported:** the GCN vs GraphSAGE level of each method, and whether hiding still erases FLTrust's safety advantage with GCN (criterion 2's pattern).
+
+Outcome rule: if G1 and G2 pass, the paper says the result holds across two encoders. If not, it names GraphSAGE as the setting where it holds.
+
 **Step 9 server-data outcome (2026-10-19): HARBOR does not need a large server share.** All 128 runs complete, no failures (`results/kaggle_main/s9_02_server_data`; analysis `scripts/server_share_analysis.py`; the 0.02 and 0.12 rows come from `nm_02_controls` and `nm_01_tune`). Tuning seeds 10–11, validation metrics, descriptive.
 
 | Server share | 0.02 | 0.05 | 0.12 | 0.20 |
