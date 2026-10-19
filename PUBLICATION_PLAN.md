@@ -616,6 +616,26 @@ Decision, with reason: the rule fixed before the runs says HARBOR alone stays th
 
 **Client weighting on FLTrust (reported):** MDIR −0.151 with no attack, but only −0.066 with 4 hiders, at an AUROC cost of −0.003 to −0.005. This is the same pattern: the benefit shrinks under hiding.
 
+**Step 9 server-data outcome (2026-10-19): HARBOR does not need a large server share.** All 128 runs complete, no failures (`results/kaggle_main/s9_02_server_data`; analysis `scripts/server_share_analysis.py`; the 0.02 and 0.12 rows come from `nm_02_controls` and `nm_01_tune`). Tuning seeds 10–11, validation metrics, descriptive.
+
+| Server share | 0.02 | 0.05 | 0.12 | 0.20 |
+| --- | --- | --- | --- | --- |
+| HARBOR MDIR, clean / hideHigh4 | 0.161 / 0.194 | 0.143 / 0.167 | 0.144 / 0.173 | 0.143 / 0.167 |
+| HARBOR AUROC, clean / hideHigh4 | 0.961 / 0.959 | 0.963 / 0.961 | 0.962 / 0.961 | 0.963 / 0.963 |
+| Server-only h50 MDIR, clean | 0.277 | 0.226 | 0.258 | 0.238 |
+| FLTrust MDIR, hideHigh4 | 0.494 | 0.505 | 0.499 | 0.492 |
+
+- **HARBOR is almost flat from 2% to 20%.** Even at 2% (about 10.8k pairs) it keeps 0.96 AUROC and an MDIR within 0.02–0.03 of its 12% level.
+- **HARBOR beats server-only training at every share:**
+  - clean and hideHigh4: −0.05 to −0.12 MDIR, +0.03 to +0.04 AUROC;
+  - testB: −0.07 to −0.10 MDIR;
+  - lie6: −0.02 to −0.07 MDIR, and a tie at 20% (+0.006).
+
+  So the federation adds safety and accuracy on top of the server's data at every share.
+- **More server data does not help the filters.** FLTrust, LFR, Zeno and CAGA change by under 0.04 MDIR between 5% and 20%. Their safety problem under hiding is not a data-quantity problem.
+
+**Decision, with reason:** the reviewer objection "the server data does the work" is answered on tuning seeds: HARBOR's level holds at 2%, and the server alone is worse at every share. The paper's main results stay at 0.12 (confirmed on seeds 17–21 and 22–26). The 2% result is the one to emphasise; it is a tuning-seed result and is presented as such. Step 10 (full scale) should run HARBOR and server-only at 2% as well as 12%, so the small-share claim has a full-scale check.
+
 **Newer defenses and an adaptive attacker against HARBOR (2026-10-19), fixed before the runs.**
 
 Reason: the newest baseline so far is FLTrust (2021), and no attacker had been built against HARBOR itself. These are the two most likely reviewer objections after the server-data question.
