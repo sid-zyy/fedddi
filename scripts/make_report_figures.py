@@ -74,7 +74,7 @@ ATT = ["clean", "hideHigh", "hideHigh4", "hide6", "hideHighLIE", "testB", "lie6"
 ATT_LAB = ["No attack", "2 hiders", "4 hiders", "6 hiders", "Hiding +\nALIE", "ALIE\n(4 att.)", "ALIE\n(6 att.)",
            "Min-max"]
 M4 = [("fedavg", "FedAvg", GRAY), ("fltrust", "FLTrust (best filter)", ORANGE),
-      ("server_h50", "Server-only training", AQUA), ("anchor_h50", "Risk-anchored (ours)", BLUE)]
+      ("server_h50", "Server-only training", AQUA), ("anchor_h50", "HARBOR (ours)", BLUE)]
 
 
 def grouped(metric, ylabel, title, name, ylim):
@@ -99,7 +99,7 @@ def grouped(metric, ylabel, title, name, ylim):
 
 
 grouped("test_mdir_high", "MDIR (lower is safer)",
-        "Risk-anchored aggregation misses far fewer high-risk interactions", "fig2_mdir_confirm.png", (0, 0.72))
+        "HARBOR misses far fewer high-risk interactions", "fig2_mdir_confirm.png", (0, 0.72))
 grouped("test_auroc", "AUROC (higher is better)", "It is also more accurate than every existing defense under every attack",
         "fig3_auroc_confirm.png", (0.65, 1.0))
 
@@ -118,14 +118,14 @@ for ax, (k, title) in zip(axs, [("test_mdir_high", "MDIR difference (negative = 
     ax.grid(axis="y", visible=False)
 axs[0].set_yticks(range(len(ATT)), labs)
 axs[0].invert_yaxis()
-fig.suptitle("Risk-anchored minus FLTrust, paired over 5 fresh seeds (95% CI)", y=1.02, x=0.02, ha="left",
+fig.suptitle("HARBOR minus FLTrust, paired over 5 fresh seeds (95% CI)", y=1.02, x=0.02, ha="left",
              fontweight="bold", fontsize=11.5, color=INK)
 save(fig, "fig4_paired_vs_fltrust.png")
 
 # Figure 5: recall by risk class.
 fig, axs = plt.subplots(1, 2, figsize=(7.2, 3.3), sharey=True)
-M5 = [("fltrust", "FLTrust", ORANGE), ("anchor_h25", "Anchored, natural mix (h25)", VIOLET),
-      ("anchor_h50", "Anchored, high-risk enriched (h50)", BLUE)]
+M5 = [("fltrust", "FLTrust", ORANGE), ("anchor_h25", "HARBOR without enrichment (h25)", VIOLET),
+      ("anchor_h50", "HARBOR, high-risk enriched (h50)", BLUE)]
 for ax, a, t in zip(axs, ["clean", "hideHigh4"], ["No attack", "4 hiders"]):
     for j, (m, lab, col) in enumerate(M5):
         mu = [C[(C.attack == a) & (C.method == m)][f"test_recall_{c}"].mean() for c in ("low", "moderate", "high")]
@@ -163,8 +163,8 @@ B = B[B.seed.isin([10, 11])]
 M7 = [("fltrust", "FLTrust", ORANGE), ("fltrust_rh50", "FLTrust, enriched data used only to filter", GRAY),
       ("fltrust_cw3", "FLTrust + clients up-weight high-risk pairs", GRAY),
       ("finetune_h50", "Server fine-tune, not fed back", GRAY),
-      ("anchor_post_h50", "Anchored step, not fed back", GRAY),
-      ("anchor_h50", "Risk-anchored (ours)", BLUE), ("anchor_h50_cw3", "Risk-anchored + client weighting", NAVY)]
+      ("anchor_post_h50", "HARBOR step, not fed back", GRAY),
+      ("anchor_h50", "HARBOR (ours)", BLUE), ("anchor_h50_cw3", "HARBOR + client weighting", NAVY)]
 fig, axs = plt.subplots(1, 2, figsize=(7.2, 3.5), sharey=True)
 for ax, a, t in zip(axs, ["clean", "hideHigh4"], ["No attack", "4 hiders"]):
     for i, (m, lab, col) in enumerate(M7):
@@ -178,7 +178,7 @@ for ax, a, t in zip(axs, ["clean", "hideHigh4"], ["No attack", "4 hiders"]):
     ax.set_xlabel("MDIR (lower is safer)")
 axs[0].set_yticks(range(len(M7)), [m[1] for m in M7], fontsize=8.5)
 axs[0].invert_yaxis()
-fig.suptitle("Simpler alternatives do not match anchoring (tuning seeds 10-11; ticks = individual seeds)", y=1.03,
+fig.suptitle("Simpler alternatives do not match HARBOR (tuning seeds 10-11; ticks = individual seeds)", y=1.03,
              x=0.02, ha="left", fontweight="bold", fontsize=10.5, color=INK)
 save(fig, "fig7_baselines.png")
 

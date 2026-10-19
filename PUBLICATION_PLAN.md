@@ -409,7 +409,7 @@ Under A Little Is Enough with 6 of 10 attackers, CAGA keeps AUROC 0.905 against 
 3. Criterion 4 is reported as a characterisation. No harm defense works, so there is nothing for the adaptive attacker to evade; the secret probe has no measurable value. The paper says so plainly.
 4. The paper's framing stays threat + metric + benchmark. CAGA's A Little Is Enough results become one subsection ("a count-free effect-based gate resists crafted majority attacks").
 
-### New method: risk-anchored aggregation (started 2026-10-18, before step 9 runs)
+### New method: HARBOR (started 2026-10-18, before step 9 runs)
 
 **Why.** The paper's biggest gap is that no defense stops coordinated hiding. Every defense tested *selects or weights clients*, and steps 3–8 show why that fails:
 - four hiders' updates look normal on overall loss and similarity;
@@ -545,11 +545,11 @@ Decisions, with reasons:
   - anchor vs CAGA under lie6.
 
 Outcomes:
-- **C1–C4 pass:** the paper presents risk-anchored aggregation as its recommended practice, framed as above.
+- **C1–C4 pass:** the paper presents HARBOR as its recommended practice, framed as above.
 - **C1–C3 pass but C4 fails:** it is reported as server-assisted aggregation, and the risk enrichment is not claimed.
 - **C1 or C2 fails:** it is reported as a tuning-seed observation.
 
-**Outcome (2026-10-19): C1–C4 all pass, so risk-anchored aggregation (anchor h50) is the paper's recommended practice.** All 375 runs complete, no failures, seeds 17–21 only (checked in every `settings.json`). Results are in the git-ignored `results/kaggle_main/nc_0{1,2,3}_*`; analysis: `scripts/confirm_anchor_analysis.py`. Differences are anchor h50 minus X, paired over 5 seeds, with 95% t-intervals.
+**Outcome (2026-10-19): C1–C4 all pass, so HARBOR (anchor h50) is the paper's recommended practice.** All 375 runs complete, no failures, seeds 17–21 only (checked in every `settings.json`). Results are in the git-ignored `results/kaggle_main/nc_0{1,2,3}_*`; analysis: `scripts/confirm_anchor_analysis.py`. Differences are anchor h50 minus X, paired over 5 seeds, with 95% t-intervals.
 - **C1 passes on all 16 comparisons, 5/5 seeds each.** hideHigh4 MDIR is 0.180, against FLTrust 0.476 (−0.296 [−0.359, −0.232]), FedAvg 0.511, FedVal 0.467, LFR 0.507, Zeno 0.484, server-only h50 0.227 (−0.047 [−0.069, −0.024]) and anchor h25 0.268 (−0.088 [−0.108, −0.068]). hideHigh is the same pattern (0.165; vs server h50 −0.059 [−0.078, −0.040]).
 - **C2 passes, with margin.** AUROC minus FLTrust ranges from +0.023 (clean, hideHigh) to +0.075 (lie6), with every interval above zero. Clean AUROC is 0.962 against FedAvg's 0.934 (+0.028 [+0.021, +0.035]).
 - **C3 passes.** Low-risk recall is +0.13 to +0.14 over FLTrust, and moderate-risk recall +0.06, under clean and hideHigh4. Risk enrichment does not trade away the other classes against FLTrust. It does trade against anchor h25, whose low and moderate recall are 0.02–0.03 higher. That is reported.
@@ -564,6 +564,8 @@ Outcomes:
 - **CAGA is reported as a benchmarked filter.** Its lie6 detection properties (step 8) stay as properties, and the paper says anchoring beats it there.
 - **Two threats to validity must be stated:** (1) at pilot scale the server alone rivals FedAvg, so how much of the gain needs the federation depends on the root share. The controls showed anchoring still beats server-only at 0.02. (2) The server's high-risk labels are assumed to be clean, the same trust assumption FLTrust makes.
 - **Step 10 (full scale) must include** anchor h50, anchor h25 and server-only h50 next to FedAvg and FLTrust, so the scale question in (1) is answered.
+
+**Naming decision (2026-10-19, the user): the method is called HARBOR** (the model is anchored in a safe place every round). Used in the paper, reports and figures. A quick web search found no federated-learning method with this name; FedSentinel was rejected because "Sentinel" (ECAI 2024) is already an FL poisoning-defense aggregation rule. Check Google Scholar and arXiv again before submission. The code keeps its internal names (`--method anchor`, presets `anchor_h50` etc.) so existing results and notebooks stay valid: HARBOR = `anchor_h50`, HARBOR without enrichment = `anchor_h25`, HARBOR + client weighting = `anchor_h50_cw3`. No acronym expansion is used.
 
 **Reviewer baselines for anchoring (2026-10-19), before step 9.** Reason: a reviewer will ask whether a simpler way of favouring high-risk pairs does as well, and if one does, the claim shrinks to "rebalance toward high-risk pairs". This matters more than step 9, which ablates the filters that anchoring has overtaken. Notebook `fedddi_anchor_baselines_01_baselines.ipynb`: tuning seeds 10–11, clean, hideHigh4 and lie6, 36 runs. FedAvg, FLTrust, anchor h50 and server-only h50 are reused from `nm_01_tune` and `nm_02_controls`.
 
