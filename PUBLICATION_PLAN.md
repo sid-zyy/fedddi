@@ -616,6 +616,28 @@ Decision, with reason: the rule fixed before the runs says HARBOR alone stays th
 
 **Client weighting on FLTrust (reported):** MDIR −0.151 with no attack, but only −0.066 with 4 hiders, at an AUROC cost of −0.003 to −0.005. This is the same pattern: the benefit shrinks under hiding.
 
+**2% share and GCN: outcomes (2026-10-20).** All 120 runs complete, no failures, and test specificity is logged (analysis `scripts/share2_gcn_analysis.py`).
+
+*2% server share (fresh seeds 32–36): S1 and S2 pass, so the paper states that HARBOR works with a 2% trusted share.*
+- **S1:** HARBOR minus FLTrust: MDIR −0.269 (clean) and −0.292 (hideHigh4). HARBOR minus server-only: −0.113 and −0.082. Every interval is clear of zero, 5/5 seeds.
+- **S2:** AUROC +0.024 and +0.025 over FLTrust, +0.089 under lie6, and +0.026 over FedAvg with no attack (FedAvg has no server data).
+- **Reported:** under lie6, HARBOR minus server-only MDIR is −0.037 [−0.065, −0.009].
+- HARBOR at 2%: MDIR 0.167 / 0.206, AUROC 0.959 / 0.956 (clean / hideHigh4). That is within about 0.02–0.03 MDIR of the 12% results, and every model's test specificity is 0.948 (none collapsed).
+
+**Decision:** "HARBOR works with only 2% trusted data, and beats training on that data alone" is now a confirmed claim. It is the main answer to the server-data objection.
+
+*GCN (seeds 17–21): G2 passes, G1 fails (HARBOR vs server-only under hideHigh4: −0.007 [−0.026, +0.012]), and the GCN runs are uninformative.*
+- Every GCN model sits at AUROC 0.865–0.870 and MDIR 0.55–0.62, whatever the method or attack.
+- FedAvg's AUROC is 0.863–0.865 from round 1 to round 40 (seed 17): the model does not learn past its first round.
+- Hiding has no effect with GCN (FLTrust +0.004, FedAvg +0.004), and FLTrust equals FedAvg.
+- HARBOR still beats FLTrust (MDIR −0.039 and −0.044, AUROC +0.003, all intervals clear of zero), but by a tenth of the GraphSAGE margin.
+
+Likely cause: DrugBank's graph is very dense (about 470 neighbours per drug). GCN's symmetric normalisation gives a node's own features weight 1/(degree + 1), so after two layers every embedding is close to the neighbourhood average (over-smoothing). GraphSAGE keeps a separate self-weight (`lin_r`) and does not have this problem.
+
+**Decision, by the rule fixed before the runs:** the paper names GraphSAGE as the setting where the result holds. It reports the GCN runs as a limitation with this explanation: a model that cannot learn the task shows neither the threat nor the defense. It does not claim that HARBOR fails with GCN, and it does not claim that HARBOR generalises across encoders.
+
+A meaningful second-architecture test needs an encoder that keeps self-information on dense graphs. Candidates are GraphSAGE with a max or pooling aggregator, GIN, or GCN with a residual self-connection. Any of these must be fixed and pre-registered before its runs. Whether to spend about 2 GPU hours on it is the user's call.
+
 **Newer defenses and adaptive attack: outcomes (2026-10-20).** All 165 runs complete, no failures (`results/kaggle_main/nd_01_defenses`, `ad_01_trust_cone`; analysis `scripts/newdef_adaptive_analysis.py`).
 
 *N1 passes: no newer defense undoes hiding.* Under hideHigh4, MDIR minus FedAvg's:
