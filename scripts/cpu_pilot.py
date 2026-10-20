@@ -93,8 +93,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model-attack", choices=MODEL_ATTACKS, default=None,
                    help="Replace --model-attack-clients' updates from --attack-start on (step 7 attacks).")
     p.add_argument("--model-attack-clients", type=int, nargs="*", default=[])
-    p.add_argument("--conv", choices=("sage", "gcn"), default="sage",
-                   help="Encoder layers: GraphSAGE (default) or GCN (the second architecture).")
+    p.add_argument("--conv", choices=("sage", "gcn", "gat"), default="sage",
+                   help="Encoder layers: GraphSAGE (default), GCN or GAT (the other architectures).")
     p.add_argument("--trust-cone-cos", type=float, default=None,
                    help="Adaptive attack against HARBOR/FLTrust: --model-attack-clients send a high-risk-suppressing "
                         "update at this cosine to their estimate of the server's (risk-enriched) update.")

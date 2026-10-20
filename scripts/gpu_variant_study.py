@@ -113,6 +113,10 @@ for _m in ("server_h50", "anchor_h50"):
 # Second architecture (2026-10-19): the same methods with GCN layers instead of GraphSAGE, settings unchanged.
 for _m in ("fedavg", "fltrust", "server_h50", "anchor_h50"):
     METHODS[f"{_m}_gcn"] = METHODS[_m] + ["--conv", "gcn"]
+    # GCN over-smoothed on dense DrugBank (2026-10-20); GAT can learn to weight a node's own features.
+    METHODS[f"{_m}_gat"] = METHODS[_m] + ["--conv", "gat"]
+# Centralized upper bound: one client holding the observations of all ten (no server data, no attack).
+METHODS["central"] = ["--method", "fedavg", "--num-clients", "1"]
 # Reviewer baselines for anchoring (simpler ways to favour high-risk pairs). Weight 3 matches the h50 enrichment:
 # high-risk pairs are ~25% of positives, so 50% enrichment raises their relative weight by (0.75/0.25) = 3.
 # _cw3: honest clients up-weight high-risk positives in their loss; fltrust_rh50: FLTrust's server sample enriched;
@@ -183,6 +187,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--methods", nargs="+", default=list(METHODS), choices=list(METHODS))
     p.add_argument("--attacks", nargs="+", default=["moderate", "testA", "testB"], choices=list(ATTACKS))
     p.add_argument("--rounds", type=int, default=40)
+    p.add_argument("--scale", choices=("pilot", "full"), default="pilot",
+                   help="full (step 10): 100k observations per client (5x), hidden 256 (2x), server samples 100k "
+                        "pairs per round; rounds, attack timing and everything else as the pilot.")
     p.add_argument("--device", default="cuda")
     p.add_argument("--parallel", type=int, default=3)
     p.add_argument("--threads", type=int, default=1)
@@ -212,6 +219,10 @@ def main() -> None:
                        "--split", a.split, "--seed", str(seed), "--rounds", str(a.rounds), "--attack-start", "12",
                        "--lr", "0.003", "--local-epochs", "2", "--device", a.device, "--threads", str(a.threads),
                        "--tag", tag, "--out", a.out] + ATTACKS[atk] + METHODS[m] + (["--log-cch"] if a.log_cch else [])
+                if a.scale == "full":
+                    # Appended last, so they override the presets' --root-obs 20000.
+                    obs = 100_000 * (10 if m == "central" else 1)
+                    cmd += ["--obs-per-client", str(obs), "--hidden", "256", "--root-obs", "100000"]
                 jobs.append((f"seed{seed}_{tag}", cmd))
     if a.dataset == "ogbl-ddi" and not a.dry_run:
         # Fixed features are cached per seed; build them once before parallel runs could race on the cache.
