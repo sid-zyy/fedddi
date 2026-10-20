@@ -221,8 +221,10 @@ def main() -> None:
                        "--tag", tag, "--out", a.out] + ATTACKS[atk] + METHODS[m] + (["--log-cch"] if a.log_cch else [])
                 if a.scale == "full":
                     # Appended last, so they override the presets' --root-obs 20000.
-                    obs = 100_000 * (10 if m == "central" else 1)
-                    cmd += ["--obs-per-client", str(obs), "--hidden", "256", "--root-obs", "100000"]
+                    cmd += ["--obs-per-client", str(100_000 * (10 if m == "central" else 1)), "--hidden", "256",
+                            "--root-obs", "100000"]
+                elif m == "central":
+                    cmd += ["--obs-per-client", "200000"]  # all ten pilot clients' observations
                 jobs.append((f"seed{seed}_{tag}", cmd))
     if a.dataset == "ogbl-ddi" and not a.dry_run:
         # Fixed features are cached per seed; build them once before parallel runs could race on the cache.

@@ -62,9 +62,19 @@ nbs = {
     'fedddi_centralized.ipynb': [
         md("# FedDDI-CAGA: centralized baselines on ogbl-ddi" + NL + NL + HEAD), md("## 1. Copy the code"), COPY,
         md("## 2. Install and download ogbl-ddi (~5 min)"), stage('setup'),
-        md("## 3. Centralized, fixed structural features, 3 runs (the ceiling for federated scores)"), stage('centralized'),
-        md("## 4. Centralized, learned embeddings, 1 run (compare with the OGB leaderboard)"), stage('centralized_emb'),
-        md("## 5. Package results"), PACK],
+        bash("cd /kaggle/working/fedddi", "grep -q build_dense_edge_counts src/models/encoder.py || "
+             "{ echo 'old fedddi_code.zip: upload the latest one'; exit 1; }"),
+        md("## 3. Centralized at pilot scale: the step 7 model and features, one client holding all ten clients' "
+           "observations, seeds 12 to 16 (5 runs, about 15 min). Compare with step 7's clean FedAvg: the cost of "
+           "federation."),
+        code("!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset ogbl-ddi --split random "
+             "--seeds 12 13 14 15 16 --methods central --attacks clean --device cuda --parallel 3 "
+             "--out /kaggle/working/results/cen_pilot && python scripts/summarize_variants.py /kaggle/working/results/cen_pilot"),
+        md("## 4. Centralized, original model (width 500), fixed structural features, 3 runs: the cost of the "
+           "pilot's smaller model and shorter training"), stage('centralized'),
+        md("## 5. Centralized, original model, learned embeddings, 1 run: the cost of fixed features "
+           "(compare with the OGB leaderboard)"), stage('centralized_emb'),
+        md("## 6. Package results"), PACK],
     'fedddi_drugbank_smoke.ipynb': [
         md("# FedDDI-CAGA: DrugBank GPU smoke test" + NL + NL + HEAD + NL + NL + PRIVATE),
         md("## 1. Copy the code and the DrugBank file"), COPY, COPY_DB, md("## 2. Install packages"), bash(PIP),
