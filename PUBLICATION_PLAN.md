@@ -701,7 +701,7 @@ Outcome rule: if G1 and G2 pass, the paper says the result holds across two enco
   - lie6: −0.02 to −0.07 MDIR, and a tie at 20% (+0.006).
 
   So the federation adds safety and accuracy on top of the server's data at every share.
-- **More server data does not help the filters.** FLTrust, LFR, Zeno and CAGA change by under 0.04 MDIR between 5% and 20%. Their safety problem under hiding is not a data-quantity problem.
+- **More server data does not help the filters.** FLTrust, LFR, Zeno and CAGA change by at most 0.03 MDIR between 5% and 20% under clean and hideHigh4. Their safety problem under hiding is not a data-quantity problem. Under lie6, LFR and Zeno improve by about 0.05 with more data (corrected 2026-10-20; the first version said "under 0.04" for every condition).
 
 **Decision, with reason:** the reviewer objection "the server data does the work" is answered on tuning seeds: HARBOR's level holds at 2%, and the server alone is worse at every share. The paper's main results stay at 0.12 (confirmed on seeds 17–21 and 22–26). The 2% result is the one to emphasise; it is a tuning-seed result and is presented as such. Step 10 (full scale) should run HARBOR and server-only at 2% as well as 12%, so the small-share claim has a full-scale check.
 

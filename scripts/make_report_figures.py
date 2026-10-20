@@ -194,3 +194,74 @@ for m in names7:
         s_ = S7[(S7.attack == a) & (S7.method == m)]
         num[f"s7|{m}|{a}"] = [round(s_.test_mdir_high.mean(), 3), round(s_.test_auroc.mean(), 3)]
 json.dump(num, open(os.path.join(out, "numbers.json"), "w"), indent=0)
+
+# Figure 8: server data share (tuning seeds 10-11, validation MDIR), with the confirmed 2% point (seeds 32-36, test).
+T = pd.concat([load(["s9_02_server_data"]).assign(nb="s9"), load(["nm_01_tune"]).assign(nb="nm1"),
+               load(["nm_02_controls"]).assign(nb="nm2")], ignore_index=True)
+T = T[T.seed.isin([10, 11])]
+SRC = {"fltrust": "s9", "anchor_h50": "nm1", "server_h50": "nm2"}
+SH = [(0.02, "_r02"), (0.05, "_r05"), (0.12, ""), (0.20, "_r20")]
+C2 = load(["s2_01_two_percent"])
+fig, axs = plt.subplots(1, 2, figsize=(7.2, 3.3), sharey=True)
+for ax, a, t in zip(axs, ["clean", "hideHigh4"], ["No attack", "4 hiders"]):
+    for m, lab, col in [("fltrust", "FLTrust", ORANGE), ("server_h50", "Server-only training", AQUA),
+                        ("anchor_h50", "HARBOR (ours)", BLUE)]:
+        ys = []
+        for sh, sfx in SH:
+            d = T[(T.method == m + sfx) & (T.attack == a)]
+            if sfx == "":
+                d = d[d.nb == SRC[m]]
+            ys.append(d.val_mdir_high.mean())
+        ax.plot([100 * x for x, _ in SH], ys, "-o", color=col, lw=2, ms=6, mec=SURF, mew=1.2, label=lab)
+        c2 = C2[(C2.method == m + "_r02") & (C2.attack == a)].test_mdir_high
+        ax.plot(2, c2.mean(), "D", color=col, ms=7, mfc=SURF, mew=1.8, zorder=4)
+    ax.set_title(t, fontsize=10.5)
+    ax.set_xticks([2, 5, 12, 20], ["2%", "5%", "12%", "20%"])
+    ax.set_xlabel("Server's share of the training data")
+    ax.set_ylim(0, 0.6)
+axs[0].set_ylabel("MDIR (lower is safer)")
+axs[0].plot([], [], "D", color=INK2, mfc=SURF, mew=1.5, label="2% confirmed on fresh seeds")
+axs[0].legend(ncol=2, fontsize=8, loc="upper center", bbox_to_anchor=(1.05, -0.2))
+save(fig, "fig8_server_share.png")
+
+# Figure 9: ten defenses vs HARBOR under 4 hiders (seeds 17-21).
+N = load(["nd_01_defenses", "nc_01_core"])
+N = N[N.attack == "hideHigh4"]
+names9 = {"fedavg": "FedAvg (no defense)", "trimmed": "Trimmed mean (2018)", "cclip": "Centered clipping (2021)",
+          "dnc": "DnC (2021)", "flame": "FLAME (2022)", "freqfed": "FreqFed-style (2024)", "lfr": "LFR (2020)",
+          "zeno": "Zeno (2019)", "fedval": "FedVal", "fltrust": "FLTrust (2021)", "anchor_h50": "HARBOR (ours)"}
+vals = sorted(((names9[m], *ci(N[N.method == m].test_mdir_high)) for m in names9), key=lambda r: -r[1])
+fig, ax = plt.subplots(figsize=(7.0, 3.8))
+fed = N[N.method == "fedavg"].test_mdir_high.mean()
+for i, (lab, mu, h) in enumerate(vals):
+    col = BLUE if lab.startswith("HARBOR") else ORANGE if lab.startswith("FLTrust") else GRAY
+    ax.barh(i, mu, xerr=h, color=col, height=0.62, error_kw=dict(ecolor=INK2, elinewidth=0.8, capsize=2), zorder=2)
+    ax.text(mu + h + 0.01, i, f"{mu:.2f}", va="center", fontsize=8, color=INK2)
+ax.axvline(fed, color=INK2, lw=0.8, ls="--")
+ax.text(fed + 0.005, len(vals) - 0.4, "FedAvg", fontsize=8, color=INK2)
+ax.set_yticks(range(len(vals)), [v[0] for v in vals], fontsize=8.5)
+ax.set_xlim(0, 0.68)
+ax.grid(axis="y", visible=False)
+ax.set_xlabel("MDIR with 4 hiding clients (lower is safer)")
+ax.set_title("No existing defense, old or new, undoes hiding")
+save(fig, "fig9_ten_defenses.png")
+
+# Figure 10: adaptive trust-cone attack (seeds 27-31).
+A = load(["ad_01_trust_cone"])
+M10 = [("fedavg", "FedAvg", GRAY), ("fltrust", "FLTrust", ORANGE), ("fedval", "FedVal", VIOLET),
+       ("anchor_h50", "HARBOR (ours)", BLUE)]
+AT10 = [("drift", "No attack\n(drift only)"), ("cone5", "Adaptive attack\n(cosine 0.5)"),
+        ("cone1", "Adaptive attack\n(cosine 0.1)")]
+fig, ax = plt.subplots(figsize=(6.6, 3.4))
+for j, (m, lab, col) in enumerate(M10):
+    mu, h = zip(*[ci(A[(A.attack == a) & (A.method == m)].test_mdir_high) for a, _ in AT10])
+    x = np.arange(len(AT10)) + (j - 1.5) * 0.2
+    ax.bar(x, mu, width=0.17, color=col, label=lab, zorder=2)
+    ax.errorbar(x, mu, yerr=h, fmt="none", ecolor=INK2, elinewidth=0.8, capsize=1.5, zorder=3)
+ax.set_xticks(range(len(AT10)), [t for _, t in AT10], fontsize=8.5)
+ax.set_ylabel("MDIR (lower is safer)")
+ax.set_ylim(0, 0.8)
+ax.grid(axis="x", visible=False)
+ax.legend(ncol=4, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.2))
+ax.set_title("An attacker built against HARBOR raises its MDIR only modestly")
+save(fig, "fig10_adaptive.png")
