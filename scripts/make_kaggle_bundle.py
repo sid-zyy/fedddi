@@ -323,23 +323,31 @@ GAT = [
     ("01_gat", "the same comparison with GAT layers", "drugbank", "random",
      [("fedavg_gat fltrust_gat server_h50_gat anchor_h50_gat", "clean hideHigh4 lie6")], "3 to 4"),
 ]
+# GAT replication on fresh seeds 42-46 (2026-10-20): the first GAT set failed its informativeness check narrowly
+# because GAT training varies across seeds; this independent set is judged on its own (PUBLICATION_PLAN.md).
+GAT2 = [
+    ("01_gat_replication", "GAT replication on fresh seeds", "drugbank", "random",
+     [("fedavg_gat fltrust_gat server_h50_gat anchor_h50_gat", "clean hideHigh4 lie6")], "3"),
+]
 EXTRA = {"10": " --scale full"}
 SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11", "NC": "17 18 19 20 21",
          "RB": "10 11", "CW": "22 23 24 25 26", "ND": "17 18 19 20 21",
          "AD": "27 28 29 30 31", "S2": "32 33 34 35 36", "GC": "17 18 19 20 21",
-         "10": "37 38 39 40 41", "GA": "17 18 19 20 21"}
+         "10": "37 38 39 40 41", "GA": "17 18 19 20 21",
+         "GR": "42 43 44 45 46"}
 LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method", "NC": "new method confirmation",
          "RB": "anchoring baselines", "CW": "client-weighting confirmation",
          "ND": "newer defenses", "AD": "adaptive attack on HARBOR",
          "S2": "small server share confirmation", "GC": "second architecture",
-         "10": "step 10 (full scale)", "GA": "second architecture (GAT)"}
+         "10": "step 10 (full scale)", "GA": "second architecture (GAT)", "GR": "GAT replication"}
 JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
         + [("9", "s9", len(STEP9), *m) for m in STEP9] + [("NM", "nm", len(NEW), *m) for m in NEW]
         + [("NC", "nc", len(CONFIRM), *m) for m in CONFIRM] + [("RB", "rb", len(BASELINES), *m) for m in BASELINES]
         + [("CW", "cw", len(CONFIRM_CW), *m) for m in CONFIRM_CW]
         + [("ND", "nd", len(NEWDEF), *m) for m in NEWDEF] + [("AD", "ad", len(ADAPT), *m) for m in ADAPT]
         + [("S2", "s2", len(SHARE2), *m) for m in SHARE2] + [("GC", "gc", len(GCN), *m) for m in GCN]
-        + [("10", "s10", len(FULL), *m) for m in FULL] + [("GA", "ga", len(GAT), *m) for m in GAT])
+        + [("10", "s10", len(FULL), *m) for m in FULL] + [("GA", "ga", len(GAT), *m) for m in GAT]
+        + [("GR", "gr", len(GAT2), *m) for m in GAT2])
 for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     out = f"/kaggle/working/results/{prefix}_{key}"
     n_runs = sum(len(m.split()) * len(a.split()) * len(SEEDS[step].split()) for m, a in blocks)
@@ -364,7 +372,8 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                    "10": "Full scale on fresh seeds 37 to 41 (never used before): 100k observations per client and "
                          "hidden size 256; everything else as step 7. ",
                    "GA": "Seeds 17 to 21 (paired with the GraphSAGE confirmation), step 7 settings with GAT "
-                         "layers. "}[step] + f"{n_runs} runs, about "
+                         "layers. ",
+                   "GR": "Fresh seeds 42 to 46 (never used before), step 7 settings with GAT layers. "}[step] + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
@@ -372,7 +381,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                else "grep -q finetune_h50 scripts/gpu_variant_study.py" if step in ("9", "RB", "CW")
                else "grep -q trust-cone-cos scripts/cpu_pilot.py" if step in ("ND", "AD")
                else "grep -q build_dense_gcn_adj src/models/encoder.py" if step in ("S2", "GC")
-               else "grep -q build_dense_edge_counts src/models/encoder.py" if step in ("10", "GA")
+               else "grep -q build_dense_edge_counts src/models/encoder.py" if step in ("10", "GA", "GR")
                else "grep -q '\"server_h50\"' scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
@@ -399,7 +408,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
               code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
               md("## 6. Package results"), PACK]
     name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor", "RB": "anchor_baselines", "CW": "confirm_cw", "ND": "newdefenses", "AD": "adaptive_harbor", "S2": "share2",
-            "GC": "gcn", "10": "step10", "GA": "gat"}.get(step, "step" + step)
+            "GC": "gcn", "10": "step10", "GA": "gat", "GR": "gat"}.get(step, "step" + step)
     nbs[f"fedddi_{name}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():
