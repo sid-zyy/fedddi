@@ -115,6 +115,10 @@ for _m in ("fedavg", "fltrust", "server_h50", "anchor_h50"):
     METHODS[f"{_m}_gcn"] = METHODS[_m] + ["--conv", "gcn"]
     # GCN over-smoothed on dense DrugBank (2026-10-20); GAT can learn to weight a node's own features.
     METHODS[f"{_m}_gat"] = METHODS[_m] + ["--conv", "gat"]
+# 2% share at full scale with the server's per-round sample matched to its data (20k draws from ~10.8k pairs, as
+# at pilot scale) instead of client parity (100k): tests whether F5 failed through over-sampling (2026-10-21).
+for _m in ("fltrust", "server_h50", "anchor_h50"):
+    METHODS[f"{_m}_r02_ro20"] = METHODS[f"{_m}_r02"]
 # Centralized upper bound: one client holding the observations of all ten (no server data, no attack).
 METHODS["central"] = ["--method", "fedavg", "--num-clients", "1"]
 # Reviewer baselines for anchoring (simpler ways to favour high-risk pairs). Weight 3 matches the h50 enrichment:
@@ -222,7 +226,7 @@ def main() -> None:
                 if a.scale == "full":
                     # Appended last, so they override the presets' --root-obs 20000.
                     cmd += ["--obs-per-client", str(100_000 * (10 if m == "central" else 1)), "--hidden", "256",
-                            "--root-obs", "100000"]
+                            "--root-obs", "20000" if m.endswith("_ro20") else "100000"]
                 elif m == "central":
                     cmd += ["--obs-per-client", "200000"]  # all ten pilot clients' observations
                 jobs.append((f"seed{seed}_{tag}", cmd))
