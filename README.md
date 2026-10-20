@@ -1,18 +1,17 @@
-# FedDDI-CAGA
+# FedDDI: HARBOR
 
-Clean-Anchor Gated Aggregation (CAGA) for federated drug–drug interaction prediction on `ogbl-ddi`. One probe-gated aggregation rule is used against label poisoning and feature drift together, without knowing which is present.
+HARBOR is a server-side aggregation method for federated drug–drug interaction (DDI) prediction that targets clinical safety: it aims to miss as few high-risk interactions as possible without raising false alarms. Each round, the server aggregates client updates with a robust rule (FLTrust), trains from that aggregate on its small trusted dataset enriched in high-risk pairs, and applies the resulting correction capped at the size of the clients' own update, so it steers the federation without replacing it.
 
-The model combines a GraphSAGE encoder with a Hadamard-product MLP link predictor. CAGA evaluates candidate aggregate updates on a clean server probe and reduces updates that increase its ranking loss. It can gate the feature projection, graph convolutions and predictor separately.
+The model is a GraphSAGE encoder (GCN optional) with a Hadamard-product MLP link predictor. The repository also contains the attack simulations, safety metrics and comparison defenses used to evaluate it.
 
-This is a research implementation. The included synthetic tests exercise aggregation behaviour; they do not establish effectiveness on the real DDI benchmark. No benchmark results or trained checkpoints are bundled.
+This is a research implementation. No data, results or trained checkpoints are bundled.
 
-## Research setup
+## What is included
 
-Every client uses the same public graph and fixed structural node features. Clients differ in the training interactions they sample. Poisoning changes local labels and can scale parameter updates; feature drift changes a client's feature values. CAGA reserves server training edges outside the client observation pool.
-
-This is a shared-public-graph simulation, not a deployment on private hospital graphs. It does not implement differential privacy or secure aggregation.
-
-FedAvg, FedProx, median-norm clipping and FLTrust are retained as comparison baselines. CAGA is selected with `defense.mode=caga`; `defense.mode=none` is the default for an undefended baseline.
+- **HARBOR** (`--method anchor` in the experiment scripts; the reported setting is the `anchor_h50` preset).
+- **Baselines:** FedAvg, FedProx, median-norm clipping, FLTrust, LFR, ERR, Zeno, Krum, coordinate median, trimmed mean, centered clipping, Divide-and-Conquer, FLAME, a FreqFed-style filter, FedVal and CAGA (clean-anchor gated aggregation).
+- **Attacks:** label poisoning and feature drift, removal or fabrication of high-risk interactions, A Little Is Enough, sign-flip, Gaussian, IPM, min-max and min-sum, on-off and adaptive attackers.
+- **Safety metrics** (`src/training/safety_metrics.py`): missed dangerous interaction rate (MDIR), recall by risk class and risk-weighted recall, counterfactual clinical harm (CCH) and damage recovery ratio (DRR), all at a fixed 95% specificity.
 
 ## Installation
 
@@ -28,43 +27,53 @@ On Windows, activate with `.venv\Scripts\activate`. Install a PyTorch build comp
 
 ## Prepare the data
 
+**ogbl-ddi** (public, downloaded through OGB):
+
 ```bash
 python -c "from src.data.dataset import load_dataset; load_dataset(root='./data')"
 python scripts/prepare_atc_mapping.py
 ```
 
-The first command downloads `ogbl-ddi` through OGB. The second downloads therapeutic-class metadata and creates `data/ogbl_ddi/atc_mapping.pt`. Use this mapping for class-targeted poisoning experiments; without it, client observation sampling falls back to a class-agnostic split. Data is downloaded separately and excluded from Git.
-
-## Run CAGA
-
-Start with a short run to check the installation. It still loads and processes the full graph.
+**DrugBank** (needed for HARBOR and the safety metrics, which use interaction severity). DrugBank is licensed: obtain the full XML export from DrugBank under your own licence. It must not be redistributed, and everything built from it stays under `data/`, which is excluded from Git.
 
 ```bash
-python main_fl.py defense.mode=caga num_clients=3 num_rounds=2 local_epochs=1 device=cuda wandb.mode=disabled plotting.enabled=false
+python scripts/prepare_drugbank.py --xml "path/to/full database.xml" --out data/drugbank --approved-only
 ```
 
-Use `device=cpu` if a GPU is unavailable, with substantially longer runtime. To run the same setup without CAGA, change `defense.mode=caga` to `defense.mode=none`. Add `fl.algorithm=fedprox` for the FedProx optimizer or use `defense.mode=norm_clip` for the clipping baseline. `defense.mode=fltrust` runs FLTrust (Cao et al., NDSS 2021): the server trains on the same reserved root edges as CAGA each round and weights clients by ReLU-clipped cosine similarity to that update. `defense.mode=root_client` is a control: plain FedAvg with the server's root-edge update averaged in as one more client, which separates the benefit of the server's clean data from the benefit of a defense.
+Severity classes (low, moderate, high) are assigned from the interaction descriptions using [conf/ddi_risk_map.yaml](conf/ddi_risk_map.yaml).
 
-For a centralized baseline with the same fixed features:
+## Run HARBOR
+
+A single run on DrugBank (10 clients, 40 rounds). Use `--device cpu` without a GPU, at a much longer runtime.
 
 ```bash
+python scripts/cpu_pilot.py --dataset drugbank --cond clean --method anchor --root-obs 20000 \
+    --anchor-base fltrust --anchor-high-frac 0.5 --anchor-kappa 1.0 --lr 0.003 --local-epochs 2 \
+    --seed 0 --device cuda --out results/harbor
+```
+
+Replace `--method anchor ...` with another method (for example `--method fltrust --root-obs 20000` or `--method fedavg`) to run a baseline, and change `--cond` or add attack flags to simulate an attack. `python scripts/cpu_pilot.py --help` lists every option. Per-round metrics are written to `rounds.csv` in the run's folder.
+
+To run a grid of named method and attack presets over several seeds in parallel:
+
+```bash
+python scripts/gpu_variant_study.py --dataset drugbank --seeds 0 1 --methods fedavg fltrust anchor_h50 \
+    --attacks clean hideHigh4 --device cuda --parallel 3 --out results/study
+python scripts/summarize_variants.py results/study
+```
+
+The presets are defined at the top of [scripts/gpu_variant_study.py](scripts/gpu_variant_study.py). `scripts/make_kaggle_bundle.py` packages the code and builds ready-to-run Kaggle notebooks for the same grids.
+
+## Flower simulation and centralized training
+
+The Flower-based pipeline runs the original defenses on ogbl-ddi at full scale:
+
+```bash
+python main_fl.py defense.mode=fltrust num_clients=3 num_rounds=2 local_epochs=1 device=cuda wandb.mode=disabled plotting.enabled=false
 python train.py baseline.use_fixed_features=true training.num_runs=1 training.epochs=50 device=cuda wandb.mode=disabled
 ```
 
-Training and attack settings are in [conf/config.yaml](conf/config.yaml). Per-round metrics are written to `results_*.csv`; use `+csv_output_dir=results/pilot` to choose a destination.
-
-## Experiments
-
-The Python runner replaces the old notebook workflows. Preview the first seed before starting GPU jobs:
-
-```bash
-python scripts/run_experiments.py --tiers 1 --seeds 0
-python scripts/run_experiments.py --tiers 1 --seeds 0 --execute
-python scripts/run_experiments.py --tiers 1 2 3 --execute
-python scripts/run_experiments.py --summarize
-```
-
-The full protocol uses 10 clients, 100 rounds and five seeds. Completed runs are skipped; interrupted runs restart from round one. There is no wall-clock budget limit. See [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) for conditions, metrics and interpretation.
+`defense.mode` accepts `none`, `norm_clip`, `fltrust`, `root_client` and `caga`. Settings are in [conf/config.yaml](conf/config.yaml).
 
 ## Tests
 
@@ -72,32 +81,21 @@ The full protocol uses 10 clients, 100 rounds and five seeds. Completed runs are
 python -m pytest tests/ -m "not slow and not integration"
 ```
 
-To run only the lightweight CAGA tests in a NumPy environment:
-
-```bash
-python -m pip install numpy pandas pyyaml pytest
-python -m pytest tests/test_caga.py tests/test_caga_sim.py tests/test_actor_cache.py tests/test_journal_protocol.py tests/test_caga_strategy.py tests/test_fltrust.py
-```
-
-Some legacy federated tests install module-level test doubles. If they interfere with an installed Flower/PyG environment, run those test files in separate processes. The full GPU pipeline must be validated with the intended dependency versions and dataset.
-
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `main_fl.py` | Flower simulation and CAGA integration |
-| `train.py` | Centralized training |
-| `src/training/caga.py` | NumPy aggregation algorithm |
-| `src/training/caga_probe.py` | Clean-probe scoring and parameter block mapping |
-| `src/training/fltrust.py` | FLTrust baseline aggregation |
-| `src/data/` | Dataset, features, observation sampling and attack simulation |
-| `src/models/` | GraphSAGE encoder and link predictor |
-| `scripts/` | Experiment runner, data preparation and diagnostics |
-| `tests/` | Algorithm and pipeline regression tests |
-| `docs/` | Method and experiment documentation |
-| `PUBLICATION_PLAN.md` | Thesis, status and roadmap toward a journal paper |
-
-`predict.py` and `scripts/export_embeddings.py` support checkpoints from the learned-embedding centralized mode. Fixed-feature checkpoint loading is not implemented in those utilities.
+| `scripts/cpu_pilot.py` | Experiment runner: every method (including HARBOR), attack and metric |
+| `scripts/gpu_variant_study.py` | Named presets and parallel grids over seeds |
+| `scripts/summarize_variants.py` | Summary tables from run folders |
+| `scripts/prepare_drugbank.py`, `scripts/prepare_atc_mapping.py` | Data preparation |
+| `src/training/robust_aggregation.py` | HARBOR's capped server correction and the robust-aggregation baselines |
+| `src/training/safety_metrics.py` | MDIR, recall by risk class, CCH and DRR |
+| `src/training/model_attacks.py` | Model-poisoning and adaptive attacks |
+| `src/data/` | Datasets, features, client sampling and attack simulation |
+| `src/models/` | GraphSAGE/GCN encoder and link predictor |
+| `main_fl.py`, `train.py` | Flower simulation and centralized training |
+| `tests/` | Regression tests |
 
 ## License
 

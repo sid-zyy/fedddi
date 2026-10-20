@@ -31,3 +31,14 @@ results_*.csv
 .idea/
 .DS_Store
 Thumbs.db
+# Private research notes and analysis (kept locally, not published)
+/PUBLICATION_PLAN.md
+/docs/
+/reports/
+/probe_vram.py
+/scripts/*_analysis.py
+/scripts/paired_main_results.py
+/scripts/make_report_figures.py
+/scripts/bench_perf.py
+/scripts/verify_data_drift_application.py
+/scripts/verify_poisoning_application.py
