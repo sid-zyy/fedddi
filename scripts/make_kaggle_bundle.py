@@ -334,17 +334,24 @@ FIX2 = [
     ("01_two_percent_matched", "2% server share at full scale, server sample matched to its data", "drugbank", "random",
      [("fltrust_r02_ro20 server_h50_r02_ro20 anchor_h50_r02_ro20 fltrust_r02", "clean hideHigh4")], "2 to 2.5"),
 ]
-EXTRA = {"10": " --scale full", "F2": " --scale full"}
+# Centralized ceiling redone (2026-10-21): the old "central" preset held one class-skewed sample, not all the data.
+CEIL_DB = [("01_drugbank_full", "centralized ceiling on all training edges, DrugBank at full scale", "drugbank",
+            "random", [("central_all", "clean")], "0.5")]
+CEIL_OGB = [("01_ogbl_pilot", "centralized ceiling on all training edges, ogbl-ddi at pilot scale", "ogbl-ddi",
+             "random", [("central_all", "clean")], "0.5 to 1")]
+EXTRA = {"10": " --scale full", "F2": " --scale full", "CD": " --scale full"}
 SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11", "NC": "17 18 19 20 21",
          "RB": "10 11", "CW": "22 23 24 25 26", "ND": "17 18 19 20 21",
          "AD": "27 28 29 30 31", "S2": "32 33 34 35 36", "GC": "17 18 19 20 21",
          "10": "37 38 39 40 41", "GA": "17 18 19 20 21",
-         "GR": "42 43 44 45 46", "F2": "47 48 49 50 51"}
+         "GR": "42 43 44 45 46", "F2": "47 48 49 50 51",
+         "CD": "37 38 39 40 41", "CO": "12 13 14 15 16"}
 LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method", "NC": "new method confirmation",
          "RB": "anchoring baselines", "CW": "client-weighting confirmation",
          "ND": "newer defenses", "AD": "adaptive attack on HARBOR",
          "S2": "small server share confirmation", "GC": "second architecture",
-         "10": "step 10 (full scale)", "GA": "second architecture (GAT)", "GR": "GAT replication", "F2": "2% share follow-up (full scale)"}
+         "10": "step 10 (full scale)", "GA": "second architecture (GAT)", "GR": "GAT replication", "F2": "2% share follow-up (full scale)",
+         "CD": "centralized ceiling (DrugBank)", "CO": "centralized ceiling (ogbl-ddi)"}
 JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
         + [("9", "s9", len(STEP9), *m) for m in STEP9] + [("NM", "nm", len(NEW), *m) for m in NEW]
         + [("NC", "nc", len(CONFIRM), *m) for m in CONFIRM] + [("RB", "rb", len(BASELINES), *m) for m in BASELINES]
@@ -352,7 +359,8 @@ JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), 
         + [("ND", "nd", len(NEWDEF), *m) for m in NEWDEF] + [("AD", "ad", len(ADAPT), *m) for m in ADAPT]
         + [("S2", "s2", len(SHARE2), *m) for m in SHARE2] + [("GC", "gc", len(GCN), *m) for m in GCN]
         + [("10", "s10", len(FULL), *m) for m in FULL] + [("GA", "ga", len(GAT), *m) for m in GAT]
-        + [("GR", "gr", len(GAT2), *m) for m in GAT2] + [("F2", "f2", len(FIX2), *m) for m in FIX2])
+        + [("GR", "gr", len(GAT2), *m) for m in GAT2] + [("F2", "f2", len(FIX2), *m) for m in FIX2]
+        + [("CD", "cd", len(CEIL_DB), *m) for m in CEIL_DB] + [("CO", "co", len(CEIL_OGB), *m) for m in CEIL_OGB])
 for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     out = f"/kaggle/working/results/{prefix}_{key}"
     n_runs = sum(len(m.split()) * len(a.split()) * len(SEEDS[step].split()) for m, a in blocks)
@@ -379,7 +387,10 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                    "GA": "Seeds 17 to 21 (paired with the GraphSAGE confirmation), step 7 settings with GAT "
                          "layers. ",
                    "GR": "Fresh seeds 42 to 46 (never used before), step 7 settings with GAT layers. ",
-                   "F2": "Fresh seeds 47 to 51 (never used before), full scale as step 10, 2% server share. "}[step] + f"{n_runs} runs, about "
+                   "F2": "Fresh seeds 47 to 51 (never used before), full scale as step 10, 2% server share. ",
+                   "CD": "Seeds 37 to 41 (paired with step 10), full scale; one client trains on every training edge. ",
+                   "CO": "Seeds 12 to 16 (paired with step 7's ogbl-ddi runs), pilot scale; one client trains on every "
+                         "training edge. "}[step] + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
@@ -389,6 +400,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                else "grep -q build_dense_gcn_adj src/models/encoder.py" if step in ("S2", "GC")
                else "grep -q build_dense_edge_counts src/models/encoder.py" if step in ("10", "GA", "GR")
                else "grep -q _ro20 scripts/gpu_variant_study.py" if step == "F2"
+               else "grep -q all-edges scripts/cpu_pilot.py" if step in ("CD", "CO")
                else "grep -q '\"server_h50\"' scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
@@ -415,7 +427,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
               code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
               md("## 6. Package results"), PACK]
     name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor", "RB": "anchor_baselines", "CW": "confirm_cw", "ND": "newdefenses", "AD": "adaptive_harbor", "S2": "share2",
-            "GC": "gcn", "10": "step10", "GA": "gat", "GR": "gat", "F2": "step10_fix"}.get(step, "step" + step)
+            "GC": "gcn", "10": "step10", "GA": "gat", "GR": "gat", "F2": "step10_fix", "CD": "ceiling", "CO": "ceiling"}.get(step, "step" + step)
     nbs[f"fedddi_{name}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():

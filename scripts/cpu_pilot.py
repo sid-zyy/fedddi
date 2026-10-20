@@ -72,6 +72,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset", choices=("ogbl-ddi", "drugbank"), default="ogbl-ddi")
     p.add_argument("--split", choices=("random", "cold"), default="random", help="DrugBank split.")
     p.add_argument("--num-clients", type=int, default=10)
+    p.add_argument("--all-edges", action="store_true",
+                   help="Centralized ceiling: the single client trains on every training edge (no class-skewed "
+                        "sampling); needs --num-clients 1.")
     p.add_argument("--rounds", type=int, default=40)
     p.add_argument("--attack-start", type=int, default=15)
     p.add_argument("--local-epochs", type=int, default=2)
@@ -378,6 +381,11 @@ def main() -> None:
     datasets = generate_client_observations(train_edges=client_pool, num_clients=a.num_clients,
                                             atc_mapping=atc_mapping, observations_per_client=a.obs_per_client,
                                             dirichlet_alpha=0.5, seed=a.seed)
+    if a.all_edges:
+        # A lone client sampled like the others would hold one random class-skewed mix, not the whole data.
+        if a.num_clients != 1:
+            raise SystemExit("--all-edges needs --num-clients 1")
+        datasets[0].edges = client_pool.clone()
 
     def trainer_for(cid: int, edges: torch.Tensor):
         return build_client_trainer(cid=cid, graph=graph, node_features=node_features, train_edges=edges,
