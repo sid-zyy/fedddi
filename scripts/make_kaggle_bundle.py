@@ -46,7 +46,8 @@ def RUN(methods, attacks):
 PIP = 'pip install -q torch-geometric ogb "flwr[simulation]>=1.10" hydra-core omegaconf "scikit-learn>=1.3"'
 PACK = code(NL.join(["import shutil", "shutil.make_archive('/kaggle/working/results', 'zip', '/kaggle/working/results')",
                      "print('Download results.zip from the Output tab')"]))
-def stage(name): return bash(f"cd /kaggle/working/fedddi && bash scripts/kaggle_gpu_checks.sh {name}")
+# "!" streams output live in Kaggle's log; a %%bash cell shows it only when the whole cell ends.
+def stage(name): return code(f"!cd /kaggle/working/fedddi && bash scripts/kaggle_gpu_checks.sh {name}")
 HEAD = ("**Before running:** set *Accelerator* to **GPU T4** and turn *Internet* **on**; attach the `fedddi_code.zip` dataset "
         "(latest version) with **Add Input**. Run with **Save Version → Save & Run All (Commit)**. Each cell stops the run if it "
         "fails. When it finishes, download `results.zip` from the **Output** tab.")
