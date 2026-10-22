@@ -119,6 +119,13 @@ for _m in ("fedavg", "fltrust", "server_h50", "anchor_h50"):
 # at pilot scale) instead of client parity (100k): tests whether F5 failed through over-sampling (2026-10-21).
 for _m in ("fltrust", "server_h50", "anchor_h50"):
     METHODS[f"{_m}_r02_ro20"] = METHODS[f"{_m}_r02"]
+# Gap-closing checks before submission (2026-10-22): local epochs 1 and 5 (presets override the runner's
+# "--local-epochs 2", since the last occurrence wins), and HARBOR's cap and enrichment around the chosen values.
+for _m in ("fedavg", "fltrust", "anchor_h50"):
+    for _e in ("1", "5"):
+        METHODS[f"{_m}_e{_e}"] = METHODS[_m] + ["--local-epochs", _e]
+METHODS["anchor_h50_k2"] = METHODS["anchor_h50"][:-2] + ["--anchor-kappa", "2.0"]
+METHODS["anchor_h75"] = METHODS["anchor_h50"][:-4] + ["--anchor-high-frac", "0.75", "--anchor-kappa", "1.0"]
 # Centralized upper bound: one client holding the observations of all ten (no server data, no attack).
 # Superseded 2026-10-21: one client sampled like the others holds a single class-skewed mix, not all the data.
 METHODS["central"] = ["--method", "fedavg", "--num-clients", "1"]
