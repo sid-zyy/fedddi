@@ -41,6 +41,14 @@ class DDIEvaluator:
         return out
 
 
+def _blob_path(root: str) -> str:
+    """The DrugBank build (drugbank_ddi.pt) or a second dataset built in the same format (ddinter_ddi.pt)."""
+    for name in ("drugbank_ddi.pt", "ddinter_ddi.pt"):
+        if os.path.exists(os.path.join(root, name)):
+            return os.path.join(root, name)
+    return os.path.join(root, "drugbank_ddi.pt")
+
+
 def load_drugbank(root: str = "./data/drugbank", split: str = "random"
                   ) -> Tuple[Data, DDIEvaluator, Dict[str, Dict[str, torch.Tensor]], torch.Tensor, torch.Tensor]:
     """Return (graph, evaluator, edge split, node features, ATC level-1 class per drug).
@@ -49,7 +57,7 @@ def load_drugbank(root: str = "./data/drugbank", split: str = "random"
     interactions (and, in the cold split, the held-out drugs' interactions) never leak into it.
     Files built with risk labels also give ``split[part]["risk"]`` (0 low, 1 moderate, 2 high) per positive.
     """
-    path = os.path.join(root, "drugbank_ddi.pt")
+    path = _blob_path(root)
     if not os.path.exists(path):
         raise FileNotFoundError(f"{path} not found: run scripts/prepare_drugbank.py on a DrugBank XML export first.")
     blob: Dict[str, Any] = torch.load(path, weights_only=False)
@@ -65,7 +73,7 @@ def load_drugbank(root: str = "./data/drugbank", split: str = "random"
 
 def edge_risk_lookup(root: str = "./data/drugbank") -> Dict[Tuple[int, int], int]:
     """Risk class (0 low, 1 moderate, 2 high) of every interacting pair, keyed by ``(min(u, v), max(u, v))``."""
-    blob: Dict[str, Any] = torch.load(os.path.join(root, "drugbank_ddi.pt"), weights_only=False)
+    blob: Dict[str, Any] = torch.load(_blob_path(root), weights_only=False)
     if "edge_risk" not in blob:
         raise KeyError("no risk labels: run scripts/prepare_drugbank.py --risk-only --out " + root)
     e = blob["edges"].long()

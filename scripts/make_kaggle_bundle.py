@@ -343,29 +343,33 @@ CEIL_OGB = [("01_ogbl_pilot", "centralized ceiling on all training edges, ogbl-d
 # Gap-closing checks before submission (2026-10-22; criteria in PUBLICATION_PLAN.md), pilot scale:
 # HARBOR against the benchmark attacks it had not faced (seeds 52-56); local epochs, cap and enrichment
 # (seeds 57-61); 80 rounds instead of 40 (seeds 57-61, so it pairs with the 40-round runs).
-GAPS_ATT = [("01_more_attacks", "HARBOR against the remaining benchmark attacks", "drugbank", "random",
-             [("fedavg fltrust anchor_h50", "fabHigh strong signflip ipm minsum onoff4")], "3")]
-GAPS_SENS = [("01_sensitivity", "local epochs, the cap and the enrichment", "drugbank", "random",
-              [("fedavg fltrust anchor_h50", "clean hideHigh4"),
-               ("fedavg_e1 fltrust_e1 anchor_h50_e1 fedavg_e5 fltrust_e5 anchor_h50_e5", "clean hideHigh4"),
-               ("anchor_h50_k05 anchor_h50_k2 anchor_h75", "clean hideHigh4")], "4 to 5")]
-GAPS_LONG = [("01_eighty_rounds", "80 rounds instead of 40", "drugbank", "random",
-              [("fedavg fltrust anchor_h50", "clean hideHigh4")], "2 to 2.5")]
-EXTRA = {"10": " --scale full", "F2": " --scale full", "CD": " --scale full", "GL": " --rounds 80"}
+# All three in one notebook (about 9.5 GPU hours, under Kaggle's 12-hour limit), most important block first.
+# A block may carry options: its own seeds, extra runner arguments and a subfolder of the notebook's results.
+GAPS = [("01_all", "sensitivity, remaining attacks and 80 rounds", "drugbank", "random", [
+    ("fedavg fltrust anchor_h50", "clean hideHigh4", {"seeds": "57 58 59 60 61", "sub": "sensitivity"}),
+    ("fedavg_e1 fltrust_e1 anchor_h50_e1 fedavg_e5 fltrust_e5 anchor_h50_e5", "clean hideHigh4",
+     {"seeds": "57 58 59 60 61", "sub": "sensitivity"}),
+    ("anchor_h50_k05 anchor_h50_k2 anchor_h75", "clean hideHigh4", {"seeds": "57 58 59 60 61", "sub": "sensitivity"}),
+    ("fedavg fltrust anchor_h50", "fabHigh strong signflip ipm minsum onoff4",
+     {"seeds": "52 53 54 55 56", "sub": "more_attacks"}),
+    ("fedavg fltrust anchor_h50", "clean hideHigh4",
+     {"seeds": "57 58 59 60 61", "sub": "eighty_rounds", "extra": " --rounds 80"}),
+], "9 to 10")]
+EXTRA = {"10": " --scale full", "F2": " --scale full", "CD": " --scale full"}
 SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11", "NC": "17 18 19 20 21",
          "RB": "10 11", "CW": "22 23 24 25 26", "ND": "17 18 19 20 21",
          "AD": "27 28 29 30 31", "S2": "32 33 34 35 36", "GC": "17 18 19 20 21",
          "10": "37 38 39 40 41", "GA": "17 18 19 20 21",
          "GR": "42 43 44 45 46", "F2": "47 48 49 50 51",
          "CD": "37 38 39 40 41", "CO": "12 13 14 15 16",
-         "GA2": "52 53 54 55 56", "GS": "57 58 59 60 61", "GL": "57 58 59 60 61"}
+         "GP": "52-61"}
 LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method", "NC": "new method confirmation",
          "RB": "anchoring baselines", "CW": "client-weighting confirmation",
          "ND": "newer defenses", "AD": "adaptive attack on HARBOR",
          "S2": "small server share confirmation", "GC": "second architecture",
          "10": "step 10 (full scale)", "GA": "second architecture (GAT)", "GR": "GAT replication", "F2": "2% share follow-up (full scale)",
          "CD": "centralized ceiling (DrugBank)", "CO": "centralized ceiling (ogbl-ddi)",
-         "GA2": "remaining attacks", "GS": "sensitivity", "GL": "longer training"}
+         "GP": "checks before submission"}
 JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
         + [("9", "s9", len(STEP9), *m) for m in STEP9] + [("NM", "nm", len(NEW), *m) for m in NEW]
         + [("NC", "nc", len(CONFIRM), *m) for m in CONFIRM] + [("RB", "rb", len(BASELINES), *m) for m in BASELINES]
@@ -375,11 +379,11 @@ JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), 
         + [("10", "s10", len(FULL), *m) for m in FULL] + [("GA", "ga", len(GAT), *m) for m in GAT]
         + [("GR", "gr", len(GAT2), *m) for m in GAT2] + [("F2", "f2", len(FIX2), *m) for m in FIX2]
         + [("CD", "cd", len(CEIL_DB), *m) for m in CEIL_DB] + [("CO", "co", len(CEIL_OGB), *m) for m in CEIL_OGB]
-        + [("GA2", "ga2", 1, *m) for m in GAPS_ATT] + [("GS", "gs", 1, *m) for m in GAPS_SENS]
-        + [("GL", "gl", 1, *m) for m in GAPS_LONG])
+        + [("GP", "gp", 1, *m) for m in GAPS])
 for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     out = f"/kaggle/working/results/{prefix}_{key}"
-    n_runs = sum(len(m.split()) * len(a.split()) * len(SEEDS[step].split()) for m, a in blocks)
+    opt = lambda b: b[2] if len(b) > 2 else {}  # noqa: E731
+    n_runs = sum(len(b[0].split()) * len(b[1].split()) * len(opt(b).get("seeds", SEEDS[step]).split()) for b in blocks)
     db = dataset == "drugbank"
     cells = [md(f"# FedDDI-CAGA Paper A, {LABEL[step]} ({key[:2]} of {total}): {title}" + NL + NL + HEAD + NL + NL
                 + ((PRIVATE + " **It must be the relabelled `drugbank_ddi.pt` with risk labels.**" + NL + NL) if db else "")
@@ -407,9 +411,10 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                    "CD": "Seeds 37 to 41 (paired with step 10), full scale; one client trains on every training edge. ",
                    "CO": "Seeds 12 to 16 (paired with step 7's ogbl-ddi runs), pilot scale; one client trains on every "
                          "training edge. ",
-                   "GA2": "Fresh seeds 52 to 56 (never used before), step 7 settings. ",
-                   "GS": "Fresh seeds 57 to 61 (never used before), step 7 settings except where a preset changes them. ",
-                   "GL": "Seeds 57 to 61 (paired with the sensitivity notebook's 40-round runs), 80 rounds. "}[step] + f"{n_runs} runs, about "
+                   "GP": "Three checks in one notebook, step 7 settings except where a block changes them: "
+                         "local epochs, cap and enrichment (fresh seeds 57 to 61); the remaining attacks against HARBOR "
+                         "(fresh seeds 52 to 56); and 80 rounds (seeds 57 to 61, paired with the 40-round runs). Results "
+                         "go to one subfolder per check. "}[step] + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
@@ -420,7 +425,7 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                else "grep -q build_dense_edge_counts src/models/encoder.py" if step in ("10", "GA", "GR")
                else "grep -q _ro20 scripts/gpu_variant_study.py" if step == "F2"
                else "grep -q all-edges scripts/cpu_pilot.py" if step in ("CD", "CO")
-               else "grep -q anchor_h50_k2 scripts/gpu_variant_study.py" if step in ("GA2", "GS", "GL")
+               else "grep -q anchor_h50_k2 scripts/gpu_variant_study.py" if step == "GP"
                else "grep -q '\"server_h50\"' scripts/gpu_variant_study.py")
     if db:
         cells += [COPY_DB, CHECK_RISK, md("## 2. Install packages and check the code version"),
@@ -439,15 +444,19 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                       f"echo \"resuming from $d\"; cp -rn \"$d\"/. {out}/; done",
                       f"echo \"$(ls {out} | grep -c seed) run folders present\""))
     cells.append(md("## 4. Runs (live progress below)"))
-    for methods, attacks in blocks:
+    for b in blocks:
+        methods, attacks, o = b[0], b[1], opt(b)
+        bout = f"{out}/{o['sub']}" if "sub" in o else out
         cells.append(code(f"!cd /kaggle/working/fedddi && python scripts/gpu_variant_study.py --dataset {dataset} "
-                          f"--split {split} --seeds {SEEDS[step]} --methods {methods} --attacks {attacks} "
-                          f"--device cuda --parallel 3 --out {out}{EXTRA.get(step, '')}"))
+                          f"--split {split} --seeds {o.get('seeds', SEEDS[step])} --methods {methods} --attacks {attacks} "
+                          f"--device cuda --parallel 3 --out {bout}{EXTRA.get(step, '')}{o.get('extra', '')}"))
+    subs = sorted({opt(b)["sub"] for b in blocks if "sub" in opt(b)})
     cells += [md("## 5. Summary table"),
-              code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}"),
+              *[code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}/{sub}") for sub in subs],
+              *([] if subs else [code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}")]),
               md("## 6. Package results"), PACK]
     name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor", "RB": "anchor_baselines", "CW": "confirm_cw", "ND": "newdefenses", "AD": "adaptive_harbor", "S2": "share2",
-            "GC": "gcn", "10": "step10", "GA": "gat", "GR": "gat", "F2": "step10_fix", "CD": "ceiling", "CO": "ceiling", "GA2": "gaps", "GS": "gaps", "GL": "gaps"}.get(step, "step" + step)
+            "GC": "gcn", "10": "step10", "GA": "gat", "GR": "gat", "F2": "step10_fix", "CD": "ceiling", "CO": "ceiling", "GP": "gaps"}.get(step, "step" + step)
     nbs[f"fedddi_{name}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():

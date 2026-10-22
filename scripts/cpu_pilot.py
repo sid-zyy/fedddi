@@ -70,6 +70,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out", default="results/cpu_pilot")
     p.add_argument("--data", default=os.path.join(ROOT, "data"))
     p.add_argument("--dataset", choices=("ogbl-ddi", "drugbank"), default="ogbl-ddi")
+    p.add_argument("--db-dir", default="drugbank",
+                   help="Folder under --data holding the labelled DDI build (drugbank, or ddinter_graph for DDInter).")
     p.add_argument("--split", choices=("random", "cold"), default="random", help="DrugBank split.")
     p.add_argument("--num-clients", type=int, default=10)
     p.add_argument("--all-edges", action="store_true",
@@ -340,7 +342,7 @@ def main() -> None:
 
     if a.dataset == "drugbank":
         from src.data.drugbank import load_drugbank
-        data, evaluator, split, node_features, atc_mapping = load_drugbank(os.path.join(a.data, "drugbank"), a.split)
+        data, evaluator, split, node_features, atc_mapping = load_drugbank(os.path.join(a.data, a.db_dir), a.split)
         num_nodes = int(data.num_nodes)
         graph = data.edge_index
     else:
@@ -364,7 +366,7 @@ def main() -> None:
         raise SystemExit("--trust-cone-cos needs risk labels (DrugBank)")
     if a.hide_high or a.fabricate_high or a.client_high_weight != 1.0 or a.trust_cone_cos is not None:
         from src.data.drugbank import edge_risk_lookup
-        edge_risk = edge_risk_lookup(os.path.join(a.data, "drugbank"))
+        edge_risk = edge_risk_lookup(os.path.join(a.data, a.db_dir))
     cfg = make_cfg(a, os.path.join(out_dir, "ckpt"))
 
     # Mirror main_fl.py: only methods that use the server's clean edges reserve them.

@@ -196,6 +196,7 @@ ATTACKS = {
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--dataset", choices=("drugbank", "ogbl-ddi"), default="drugbank")
+    p.add_argument("--db-dir", default="drugbank", help="Passed to cpu_pilot.py (ddinter_graph for DDInter).")
     p.add_argument("--split", default="random")
     p.add_argument("--seeds", type=int, nargs="+", default=[10, 11])
     p.add_argument("--methods", nargs="+", default=list(METHODS), choices=list(METHODS))
@@ -230,6 +231,7 @@ def main() -> None:
             for m in a.methods:
                 tag = f"{atk}_{m}"
                 cmd = [sys.executable, os.path.join(ROOT, "scripts", "cpu_pilot.py"), "--dataset", a.dataset,
+                       "--db-dir", a.db_dir,
                        "--split", a.split, "--seed", str(seed), "--rounds", str(a.rounds), "--attack-start", "12",
                        "--lr", "0.003", "--local-epochs", "2", "--device", a.device, "--threads", str(a.threads),
                        "--tag", tag, "--out", a.out] + ATTACKS[atk] + METHODS[m] + (["--log-cch"] if a.log_cch else [])
