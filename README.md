@@ -4,13 +4,14 @@ HARBOR is a server-side aggregation method for federated drug–drug interaction
 
 The model is a GraphSAGE encoder (GCN optional) with a Hadamard-product MLP link predictor. The repository also contains the attack simulations, safety metrics and comparison defenses used to evaluate it.
 
-This is a research implementation. No data, results or trained checkpoints are bundled.
+This is a research implementation accompanying a manuscript that is under review and has not been accepted or published. Results and design choices may change, and the code should not be cited as a published method. No data, results or trained checkpoints are bundled.
 
 ## What is included
 
 - **HARBOR** (`--method anchor` in the experiment scripts; the reported setting is the `anchor_h50` preset).
 - **Baselines:** FedAvg, FedProx, median-norm clipping, FLTrust, LFR, ERR, Zeno, Krum, coordinate median, trimmed mean, centered clipping, Divide-and-Conquer, FLAME, a FreqFed-style filter, FedVal and CAGA (clean-anchor gated aggregation).
-- **Attacks:** label poisoning and feature drift, removal or fabrication of high-risk interactions, A Little Is Enough, sign-flip, Gaussian, IPM, min-max and min-sum, on-off and adaptive attackers.
+- **Client feature drift:** two honest clients can be given a sudden or gradual covariate shift of their node features (`src/data/data_drift.py`). The drift is injected to make clients differ; nothing in the code detects or measures it.
+- **Attacks:** label poisoning, removal or fabrication of high-risk interactions, A Little Is Enough, sign-flip, Gaussian, IPM, min-max and min-sum, on-off and adaptive attackers.
 - **Safety metrics** (`src/training/safety_metrics.py`): missed dangerous interaction rate (MDIR), recall by risk class and risk-weighted recall, counterfactual clinical harm (CCH) and damage recovery ratio (DRR), all at a fixed 95% specificity.
 
 ## Installation
@@ -27,6 +28,8 @@ On Windows, activate with `.venv\Scripts\activate`. Install a PyTorch build comp
 
 ## Prepare the data
 
+Datasets: [DrugBank](https://go.drugbank.com/) (licensed), [DDInter](https://ddinter.scbdd.com/) (CC BY-NC-SA 4.0) and [ogbl-ddi](https://ogb.stanford.edu/docs/linkprop/#ogbl-ddi) (public).
+
 **ogbl-ddi** (public, downloaded through OGB):
 
 ```bash
@@ -34,13 +37,19 @@ python -c "from src.data.dataset import load_dataset; load_dataset(root='./data'
 python scripts/prepare_atc_mapping.py
 ```
 
-**DrugBank** (needed for HARBOR and the safety metrics, which use interaction severity). DrugBank is licensed: obtain the full XML export from DrugBank under your own licence. It must not be redistributed, and everything built from it stays under `data/`, which is excluded from Git.
+**DrugBank** (needed for the node features and the DrugBank-based experiments). DrugBank is licensed: obtain the full XML export from DrugBank under your own licence. It must not be redistributed, and everything built from it stays under `data/`, which is excluded from Git.
 
 ```bash
 python scripts/prepare_drugbank.py --xml "path/to/full database.xml" --out data/drugbank --approved-only
 ```
 
-Severity classes (low, moderate, high) are assigned from the interaction descriptions using [conf/ddi_risk_map.yaml](conf/ddi_risk_map.yaml).
+Severity classes (low, moderate, high) are assigned from the interaction descriptions using [conf/ddi_risk_map.yaml](conf/ddi_risk_map.yaml). These outcome-type classes agree poorly with expert grades (weighted kappa 0.04 on the pairs shared with DDInter), so they are a secondary analysis.
+
+**DDInter** (expert severity grades; used for the main safety results). Download the DDInter files from the site above, then match them to the prepared DrugBank drugs:
+
+```bash
+python scripts/prepare_ddinter.py --ddinter data/ddinter --drugbank data/drugbank --out data/ddinter_graph
+```
 
 ## Run HARBOR
 
