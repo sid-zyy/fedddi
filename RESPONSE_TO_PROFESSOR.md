@@ -108,3 +108,50 @@ Design notes:
 - Caveat to state in the paper: hidden pairs stay in the public message-passing graph (it stands for a shared reference resource). Under truly systemic under-reporting that resource could be incomplete too; we do not model that.
 
 After the runs: `python scripts/summarize_variants.py <folder>` per subfolder, then write the corruption figure (MDIR vs corruption %) and the grid heatmap.
+
+## Results (2026-11-23)
+
+All 760 runs finished (40 rounds each), DDInter, 5 seeds per cell. Data in `results/revision2/`, tables from `scripts/analyze_revision2.py` (`results/revision2/analysis.txt`), figures from `scripts/make_revision2_figures.py` (`paper_tcbb/figures/fig_server_corruption.pdf`, `fig_systemic.pdf`, `fig_attack_grid.pdf`). MDIR = missed Major rate at 95% specificity, lower is safer. "Delta" = paired HARBOR minus FLTrust on the same seed; every Delta below has p < 0.005 (paired t-test, n = 5).
+
+**Q4 Server data (attack: 4 hiders at 80%).** Clean server: HARBOR 0.087, server-only 0.149, FLTrust 0.260, FedAvg 0.330.
+
+| Corruption at 20% | HARBOR | change vs clean | Server only | FLTrust (same root) |
+|---|---|---|---|---|
+| Major flag flipped (sn) | 0.107 | +0.019 | 0.192 | 0.260 (ignores labels) |
+| Major labelled lower (sd) | 0.088 | +0.000 | 0.148 | 0.260 (ignores labels) |
+| Major pairs missing (smh) | 0.093 | +0.006 | 0.165 | 0.273 |
+| Pairs missing (sm) | 0.093 | +0.005 | 0.168 | 0.259 |
+| False pairs (sf) | 0.140 | +0.053 | 0.197 | 0.302 |
+
+- Label errors and missing pairs barely move HARBOR (at most +0.02 at 20%). Downgrading Major labels does nothing measurable, as predicted: it only shrinks the enrichment pool.
+- False pairs are the one real weakness: +0.015 at 10%, +0.053 at 20%. Even then HARBOR (0.140) stays well below FLTrust (0.302) and below its own server-only model (0.197).
+- HARBOR beats FLTrust at every corruption type and level (Delta -0.15 to -0.19), and beats server-only everywhere, so the clients still add value when the server is wrong.
+- No breaking point was reached within 20%. Say "up to 20% corruption" and not more.
+
+**Q1 Systemic under-reporting (all 10 centres, from round 1).** Server-only 0.158.
+
+| All centres hide Major | 0% | 20% | 40% | 60% | 80% | Uneven U(20-80%) | All severities 40% | All severities 80% |
+|---|---|---|---|---|---|---|---|---|
+| HARBOR | 0.075 | 0.077 | 0.085 | 0.090 | 0.105 | 0.090 | 0.087 | 0.145 |
+| FLTrust | 0.199 | 0.208 | 0.237 | 0.272 | 0.357 | 0.254 | 0.295 | 0.665 (AUROC 0.84) |
+| FedAvg | 0.249 | 0.260 | 0.297 | 0.329 | 0.438 | 0.325 | 0.351 | 0.549 |
+
+- The pre-registered worry (HARBOR collapses to server-only) did not happen: HARBOR stays below server-only even at 80% everywhere, and degrades by only +0.03 (Major) or +0.07 (all severities, 80%).
+- FLTrust has nothing to compare against when everyone is biased; it degrades with the clients and collapses when every centre drops 80% of all records.
+- Caveat to state: hidden pairs stay in the shared message-passing graph, which helps every method; under truly systemic under-reporting that resource could also be incomplete.
+
+**Q3 Attack grid (hiders 1/2/4/6 x share 20-80%).** HARBOR MDIR 0.071-0.087 across the whole grid; FLTrust 0.178-0.247. Delta -0.107 (1 hider, 20%) to -0.161 (6 hiders, 80%), growing with attack strength. Honest reading: about -0.11 of the gap is present without any attack (drift only: HARBOR 0.072, FLTrust 0.182), so the attack-specific part is the growth from -0.11 to -0.16. Attack cost at the strongest cell: HARBOR +0.014, FLTrust +0.066, FedAvg +0.104 over their drift-only levels.
+
+**Q3 Centres (fixed client data).**
+
+| Setting | HARBOR | FLTrust | FedAvg | Server only |
+|---|---|---|---|---|
+| Equal centres, hideHigh4 | 0.081 | 0.224 | 0.270 | 0.153 |
+| Unequal centres (5k-40k pairs, 10-40% Major), hideHigh4 | 0.088 | 0.240 | 0.280 | 0.150 |
+| Honest centres missing 10-30%, no hiders | 0.076 | 0.198 | 0.245 | 0.153 |
+| Honest missingness plus hideHigh4 | 0.089 | 0.246 | 0.307 | - |
+
+- Unequal sizes and case mix cost HARBOR +0.007; the ranking and the gap do not change (Delta -0.15 in both).
+- Honest noise next to hiders adds +0.004 for HARBOR and +0.026 for FLTrust.
+
+**What this means for the reply.** All four critiques now have numbers behind them, and none overturns the paper's claim. The one limit to state plainly is false interactions in the server data: at 20% they raise HARBOR's MDIR from 0.087 to 0.140 (the server-only model rises in step, from 0.149 to 0.197). So the server set must be audited for fabricated pairs, not only for wrong severities.
