@@ -46,6 +46,12 @@ GROUPS = {"moderate": {0: _P, 1: _P, 2: _D, 3: _D},
              for k in ("signflip", "gauss", "ipm", "minmax", "minsum", "onoff4", "adaptive4", "adaptive4p")},
           "lie6": {0: _P, 1: _P, 4: _P, 5: _P, 6: _P, 7: _P, 2: _D, 3: _D},
           "clean": {}}
+# Revision 2: the attack-strength grid uses the same hiders as hide1 / hideHigh / hideHigh4 / hide6; under systemic
+# under-reporting every centre leaves data out (counted as "poisoned"); honest missingness is still honest.
+_BY_M = {"1": GROUPS["hide1"], "2": GROUPS["hideHigh"], "4": GROUPS["hideHigh4"], "6": GROUPS["hide6"]}
+GROUPS.update({f"hide{m}r{r}": g for m, g in _BY_M.items() for r in "2468"})
+GROUPS.update({k: {i: _P for i in range(10)} for k in ("sys2", "sys4", "sys6", "sys8", "sysU", "sysAll4", "sysAll8")})
+GROUPS.update({"noisyHonest": GROUPS["drift"], "hideHigh4N": GROUPS["hideHigh4"]})
 WINDOW_COLS = ("val_auroc", "test_auroc", "val_aupr", "test_aupr", "val_hits20", "test_hits20",
                "poison_fabricated_mean_prob", "poison_suppressed_mean_prob", "threshold",
                "val_mdir_high", "test_mdir_high", "test_recall_low", "test_recall_moderate", "test_recall_high",

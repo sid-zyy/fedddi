@@ -140,6 +140,77 @@ def hide_high_risk(pos_edges: Tensor, risk: RiskIndex, frac: float, rng: np.rand
     return pos_edges[torch.from_numpy(keep)], pos_edges[torch.from_numpy(chosen)].long()
 
 
+def hide_random(pos_edges: Tensor, frac: float, rng: np.random.Generator) -> "tuple[Tensor, Tensor]":
+    """Drop a share `frac` of all positives, whatever their risk (random under-reporting); returns (kept, hidden)."""
+    k = int(round(frac * pos_edges.size(0)))
+    if k == 0:
+        return pos_edges, torch.empty(0, 2, dtype=torch.long)
+    chosen = rng.choice(pos_edges.size(0), size=k, replace=False)
+    keep = np.ones(pos_edges.size(0), dtype=bool)
+    keep[chosen] = False
+    return pos_edges[torch.from_numpy(keep)], pos_edges[torch.from_numpy(chosen)].long()
+
+
+SERVER_CORRUPTIONS = ("risk_noise", "risk_downgrade", "drop", "drop_high", "fake")
+
+
+def corrupt_server_data(edges: Tensor, risk: Tensor, kind: str, frac: float, num_nodes: int,
+                        edge_lookup: frozenset, rng: np.random.Generator) -> "tuple[Tensor, Tensor, Dict[str, int]]":
+    """Corrupt the server's trusted pairs to test how much HARBOR relies on them being correct.
+
+    risk_noise: a share `frac` of the pairs get a wrong Major label (Major becomes moderate, any other class becomes
+    Major), so the server's enrichment picks the wrong pairs. risk_downgrade: a share `frac` of the true Major pairs
+    are labelled moderate (Major interactions the server's curators missed). drop: a share `frac` of the pairs is
+    removed at random. drop_high: a share `frac` of the Major pairs is removed. fake: a share `frac` of the pairs is
+    replaced with random non-interacting pairs that keep the replaced pair's risk label (false interactions, some
+    of them labelled Major). Only the server's copy changes; the public graph and every evaluation label stay clean.
+    Returns (edges, risk, counts of what changed)."""
+    if kind not in SERVER_CORRUPTIONS:
+        raise ValueError(f"unknown server corruption {kind!r}")
+    if not 0.0 <= frac < 1.0:
+        raise ValueError(f"server corruption share must be in [0, 1), got {frac}")
+    edges, risk = edges.clone(), risk.clone()
+    r = risk.cpu().numpy()
+    high = np.flatnonzero(r == HIGH_RISK)
+    info = {"pairs_before": int(edges.size(0)), "major_before": int(high.size)}
+    if frac == 0.0:
+        return edges, risk, dict(info, changed=0)
+    if kind == "risk_noise":
+        idx = rng.choice(r.size, size=int(round(frac * r.size)), replace=False)
+        r = r.copy()
+        r[idx] = np.where(r[idx] == HIGH_RISK, 1, HIGH_RISK)
+        risk = torch.as_tensor(r, dtype=risk.dtype)
+        changed = idx.size
+    elif kind == "risk_downgrade":
+        idx = rng.choice(high, size=int(round(frac * high.size)), replace=False)
+        r = r.copy()
+        r[idx] = 1
+        risk = torch.as_tensor(r, dtype=risk.dtype)
+        changed = idx.size
+    elif kind in ("drop", "drop_high"):
+        pool = high if kind == "drop_high" else np.arange(r.size)
+        idx = rng.choice(pool, size=int(round(frac * pool.size)), replace=False)
+        keep = np.ones(r.size, dtype=bool)
+        keep[idx] = False
+        edges, risk = edges[torch.from_numpy(keep)], risk[torch.from_numpy(keep)]
+        changed = idx.size
+    else:
+        idx = rng.choice(r.size, size=int(round(frac * r.size)), replace=False)
+        fakes, seen = [], set()
+        while len(fakes) < idx.size:
+            u, v = rng.integers(0, num_nodes, size=2)
+            key = (int(min(u, v)), int(max(u, v)))
+            if u == v or key in edge_lookup or key in seen:
+                continue
+            seen.add(key)
+            fakes.append((int(u), int(v)))
+        edges[torch.from_numpy(idx)] = torch.tensor(fakes, dtype=edges.dtype).view(-1, 2)
+        changed = idx.size
+    info.update(changed=int(changed), pairs_after=int(edges.size(0)),
+                major_after=int((risk == HIGH_RISK).sum()))
+    return edges, risk, info
+
+
 def high_risk_class_pairs(train_edges: Tensor, atc_mapping: Tensor, risk: RiskIndex, min_edges: int = 100,
                           lift: float = 2.0) -> "tuple[np.ndarray, np.ndarray]":
     """ATC class pairs whose interactions are often high-risk: high-risk share >= `lift` times the overall
@@ -209,6 +280,9 @@ class PoisonEvent:
     update_scale: float = 1.0
     hide_risk: float = 0.0
     fabricate_high: float = 0.0
+    # Drops this share of ALL the client's positives each round, whatever their risk (random under-reporting,
+    # e.g. an honest site with incomplete records). Needs no risk labels.
+    hide_any: float = 0.0
     # On-off attacker: inclusive (first, last) round windows in which the attack runs; outside them the
     # client behaves honestly. None means always on from start_round.
     active: Optional[List[Tuple[int, int]]] = None
@@ -266,9 +340,15 @@ class PoisoningSimulator:
         observations_per_client: Optional[int] = None,
         seed: Optional[int] = None,
         edge_risk: Optional[Dict[Tuple[int, int], int]] = None,
+        fixed_base: Optional[List[Tensor]] = None,
     ) -> None:
         if not initial_datasets:
             raise ValueError("initial_datasets must not be empty")
+        if fixed_base is not None and len(fixed_base) != len(initial_datasets):
+            raise ValueError("fixed_base needs one edge set per client")
+        # fixed_base: each client keeps its own fixed observations every round (as with no simulator) instead of
+        # re-sampling from train_edges each round; the attack is then applied to that fixed set.
+        self._fixed_base = fixed_base
 
         self._train_edges = train_edges
         self._atc_mapping = atc_mapping
@@ -345,13 +425,16 @@ class PoisoningSimulator:
         datasets: List[LocalObservationDataset] = []
 
         for cid in range(self._num_clients):
-            base_edges = sample_observations(
-                self._train_edges,
-                self._atc_mapping,
-                self._clean_mixtures[cid],
-                self._n_obs,
-                rng,
-            )
+            if self._fixed_base is not None:
+                base_edges = self._fixed_base[cid]
+            else:
+                base_edges = sample_observations(
+                    self._train_edges,
+                    self._atc_mapping,
+                    self._clean_mixtures[cid],
+                    self._n_obs,
+                    rng,
+                )
 
             event = self._events_by_client.get(cid)
             if event is None or not event.is_active(server_round):
@@ -383,6 +466,9 @@ class PoisoningSimulator:
             )
             if event.hide_risk > 0:
                 pos_edges, hidden = hide_high_risk(pos_edges, self._risk, event.hide_risk * severity, rng)
+                false_neg = torch.cat([false_neg, hidden], dim=0)
+            if event.hide_any > 0:
+                pos_edges, hidden = hide_random(pos_edges, event.hide_any * severity, rng)
                 false_neg = torch.cat([false_neg, hidden], dim=0)
             if event.fabricate_high > 0:
                 fake = fabricate_high_risk(int(round(event.fabricate_high * severity * self._n_obs)),

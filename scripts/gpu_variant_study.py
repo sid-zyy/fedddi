@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -142,6 +143,15 @@ METHODS["fltrust_rh50"] = METHODS["fltrust"] + ["--fltrust-high-frac", "0.5"]
 METHODS["anchor_post_h50"] = METHODS["anchor_h50"] + ["--anchor-feedback", "0"]
 METHODS["finetune_h50"] = METHODS["anchor_h50"][:-2] + ["--anchor-kappa", "1000000", "--anchor-feedback", "0"]
 METHODS["anchor_h50_cw3"] = METHODS["anchor_h50"] + ["--client-high-weight", "3"]
+# Revision 2 (2026-11-22): imperfect server data. Suffix _<kind><pct>: sn = wrong Major labels (risk_noise),
+# sd = Major pairs labelled moderate (risk_downgrade), sm = pairs missing, smh = Major pairs missing, sf = false
+# pairs (fake); pct 05, 10 or 20 percent of the server's pairs (of its Major pairs for sd and smh).
+SERVER_CORRUPT = {"sn": "risk_noise", "sd": "risk_downgrade", "sm": "drop", "smh": "drop_high", "sf": "fake"}
+for _m in ("fltrust", "server_h50", "anchor_h50"):
+    for _k, _kind in SERVER_CORRUPT.items():
+        for _p in ("05", "10", "20"):
+            METHODS[f"{_m}_{_k}{_p}"] = METHODS[_m] + ["--server-corrupt", _kind, "--server-corrupt-frac",
+                                                       str(int(_p) / 100)]
 
 # Step 6 grid (Paper A): harm tolerance x high-risk share of the probe, for both harm modes. Names avoid dots
 # so summarize_variants.py can parse them: t005 = 0.005, h3 = 0.3.
@@ -191,6 +201,29 @@ ATTACKS = {
     "adaptive4p": ["--cond", "joint", "--hide-high", "0.8", "--no-boost", "--extra-poisoned", "4", "5", "--adaptive-hide",
                    "--adaptive-knows-probe"],
 }
+# Revision 2 (2026-11-22). Systemic under-reporting: all ten centres (the two drifted ones included) leave out a
+# share of their Major pairs from round 1: sys2..sys8 = 20..80%; sysU = each centre's share drawn from U(0.2, 0.8);
+# sysAll4/sysAll8 = 40/80% of pairs of any severity, at random. Drift as in every main run.
+_ALL = [str(i) for i in range(10)]
+for _r in ("2", "4", "6", "8"):
+    ATTACKS[f"sys{_r}"] = ["--cond", "drift", "--underreport-clients", *_ALL, "--underreport-rho", f"0.{_r}"]
+ATTACKS["sysU"] = ["--cond", "drift", "--underreport-clients", *_ALL, "--underreport-rho-range", "0.2", "0.8"]
+for _r in ("4", "8"):
+    ATTACKS[f"sysAll{_r}"] = ["--cond", "drift", "--underreport-clients", *_ALL, "--underreport-scope", "all",
+                              "--underreport-rho", f"0.{_r}"]
+# Attack-strength grid: m hiders (1, 2, 4, 6; same clients and timing as hide1/hideHigh/hideHigh4/hide6) x share
+# hidden (20..80%). hide4r8 is hideHigh4.
+_HIDERS = {"1": ["--poisoned-count", "1"], "2": [], "4": ["--extra-poisoned", "4", "5"],
+           "6": ["--extra-poisoned", "4", "5", "6", "7"]}
+for _m, _x in _HIDERS.items():
+    for _r in ("2", "4", "6", "8"):
+        ATTACKS[f"hide{_m}r{_r}"] = ["--cond", "joint", "--hide-high", f"0.{_r}", "--no-boost", *_x]
+# Honest centres with incomplete records: the six non-hiders (drifted included) each leave out U(0.1, 0.3) of their
+# pairs at random from round 1, with (hideHigh4N) or without (noisyHonest) the four hiders.
+_HONEST = ["--underreport-clients", "2", "3", "6", "7", "8", "9", "--underreport-scope", "all",
+           "--underreport-rho-range", "0.1", "0.3"]
+ATTACKS["noisyHonest"] = ["--cond", "drift", *_HONEST]
+ATTACKS["hideHigh4N"] = ATTACKS["hideHigh4"] + _HONEST
 
 
 def parse_args() -> argparse.Namespace:
@@ -210,6 +243,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--threads", type=int, default=1)
     p.add_argument("--out", default=os.path.join(ROOT, "results", "gpu_variants"))
     p.add_argument("--log-cch", action="store_true", help="Pass --log-cch to every run.")
+    # Revision runs (2026-11-12), passed to every run: fixed client data under poisoning attacks, disjoint
+    # client partitions, and the last round's per-pair test scores.
+    p.add_argument("--fixed-client-data", action="store_true")
+    p.add_argument("--partition", choices=("sampled", "disjoint"), default="sampled")
+    p.add_argument("--save-scores", action="store_true")
+    p.add_argument("--pilot-args", default="",
+                   help="More cpu_pilot.py arguments for every run, e.g. \"--client-size-range 5000 40000\".")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -235,6 +275,8 @@ def main() -> None:
                        "--split", a.split, "--seed", str(seed), "--rounds", str(a.rounds), "--attack-start", "12",
                        "--lr", "0.003", "--local-epochs", "2", "--device", a.device, "--threads", str(a.threads),
                        "--tag", tag, "--out", a.out] + ATTACKS[atk] + METHODS[m] + (["--log-cch"] if a.log_cch else [])
+                cmd += (["--fixed-client-data"] if a.fixed_client_data else []) + ["--partition", a.partition] \
+                    + (["--save-scores"] if a.save_scores else []) + shlex.split(a.pilot_args)
                 if a.scale == "full":
                     # Appended last, so they override the presets' --root-obs 20000.
                     cmd += ["--obs-per-client", str(100_000 * (10 if m == "central" else 1)), "--hidden", "256",

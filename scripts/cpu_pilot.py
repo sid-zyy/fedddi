@@ -32,8 +32,10 @@ import journal_protocol as jp  # noqa: E402
 from src.data.data_drift import DataDriftSimulator, FeatureDriftEvent  # noqa: E402
 from src.data.dataset import get_edge_split, load_dataset  # noqa: E402
 from src.data.features import compute_fixed_global_features  # noqa: E402
-from src.data.local_observations import generate_client_observations  # noqa: E402
-from src.data.poisoning import PoisonEvent, PoisoningSimulator, RiskIndex  # noqa: E402
+from src.data.local_observations import (  # noqa: E402
+    LocalObservationDataset, build_edge_lookup, generate_client_observations, sample_observations)
+from src.data.poisoning import (  # noqa: E402
+    SERVER_CORRUPTIONS, PoisonEvent, PoisoningSimulator, RiskIndex, corrupt_server_data)
 from src.training.caga import CAGAHyperparams, caga_round, make_probe_loss_fn  # noqa: E402
 from src.training.caga_probe import (  # noqa: E402
     compute_block_index_map, probe_seed, sample_probe_edges, sample_risk_probe)
@@ -77,6 +79,35 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--all-edges", action="store_true",
                    help="Centralized ceiling: the single client trains on every training edge (no class-skewed "
                         "sampling); needs --num-clients 1.")
+    p.add_argument("--fixed-client-data", action="store_true",
+                   help="Under a poisoning attack, every client keeps its own fixed observations each round (as with no "
+                        "attack) instead of re-sampling them each round from all training edges, server pairs included.")
+    p.add_argument("--partition", choices=("sampled", "disjoint"), default="sampled",
+                   help="disjoint: the client pool is split so no pair is held by two clients (per-class Dirichlet "
+                        "split, same alpha); needs --fixed-client-data and ignores --obs-per-client.")
+    p.add_argument("--save-scores", action="store_true",
+                   help="Write the last round's test scores, risk classes, drug ATC classes and threshold to scores.npz.")
+    # Revision 2 (2026-11-22, professor's review): imperfect server data, systemic under-reporting and
+    # heterogeneous centres. See RESPONSE_TO_PROFESSOR.md.
+    p.add_argument("--server-corrupt", choices=SERVER_CORRUPTIONS, default=None,
+                   help="Corrupt the server's trusted pairs (risk_noise, risk_downgrade, drop, drop_high, fake); "
+                        "evaluation labels stay clean. Needs a method that uses server data.")
+    p.add_argument("--server-corrupt-frac", type=float, default=0.0, help="Share corrupted (e.g. 0.05, 0.1, 0.2).")
+    p.add_argument("--underreport-clients", type=int, nargs="*", default=[],
+                   help="Clients that under-report (any client, drifted ones included); they are not counted as "
+                        "attackers by the defenses that need a count.")
+    p.add_argument("--underreport-rho", type=float, default=0.8, help="Share each of them leaves out.")
+    p.add_argument("--underreport-rho-range", type=float, nargs=2, default=None,
+                   help="Draw each under-reporting client's share from Uniform(lo, hi) instead (seeded).")
+    p.add_argument("--underreport-scope", choices=("high", "all"), default="high",
+                   help="high: leave out Major pairs only; all: leave out pairs of any severity at random.")
+    p.add_argument("--underreport-start", type=int, default=1, help="First round of under-reporting.")
+    p.add_argument("--client-size-range", type=int, nargs=2, default=None,
+                   help="Each client holds a log-uniform number of pairs in [lo, hi] (seeded); needs "
+                        "--fixed-client-data.")
+    p.add_argument("--client-high-range", type=float, nargs=2, default=None,
+                   help="Each client's share of Major pairs is drawn from Uniform(lo, hi) (seeded); needs "
+                        "--fixed-client-data and risk labels.")
     p.add_argument("--rounds", type=int, default=40)
     p.add_argument("--attack-start", type=int, default=15)
     p.add_argument("--local-epochs", type=int, default=2)
@@ -251,6 +282,76 @@ def build_events(a: argparse.Namespace, num_features: int = 50):
     return poison, drift
 
 
+def disjoint_partition(pool: torch.Tensor, atc_mapping: Optional[torch.Tensor], num_clients: int, alpha: float,
+                       seed: int) -> List[LocalObservationDataset]:
+    """Split the client pool so that no pair is held by two clients: each drug class's pairs are divided among
+    the clients in Dirichlet(alpha) proportions (the usual non-IID label-skew split), so clients keep different
+    class mixes as in the sampled setting. Each client's class mixture is its shard's empirical one."""
+    rng = np.random.default_rng(seed + 31337)
+    classes = (atc_mapping.cpu().numpy()[pool[:, 0].cpu().numpy()] if atc_mapping is not None
+               else np.zeros(pool.size(0), dtype=np.int64))
+    shards: List[List[np.ndarray]] = [[] for _ in range(num_clients)]
+    for c in np.unique(classes):
+        idx = rng.permutation(np.flatnonzero(classes == c))
+        cuts = (np.cumsum(rng.dirichlet(np.full(num_clients, alpha)))[:-1] * idx.size).astype(int)
+        for k, part in enumerate(np.split(idx, cuts)):
+            shards[k].append(part)
+    out = []
+    for k in range(num_clients):
+        idx = rng.permutation(np.concatenate(shards[k]))
+        cls, cnt = np.unique(classes[idx], return_counts=True)
+        out.append(LocalObservationDataset(client_id=k, edges=pool[torch.from_numpy(idx).long()],
+                                           class_mixture={int(c): float(n) / idx.size for c, n in zip(cls, cnt)}))
+    return out
+
+
+def heterogeneous_clients(datasets: List[LocalObservationDataset], pool: torch.Tensor,
+                          atc_mapping: Optional[torch.Tensor], risk: Optional[RiskIndex],
+                          size_range: Optional[List[int]], high_range: Optional[List[float]],
+                          seed: int) -> List[LocalObservationDataset]:
+    """Centres that differ in data volume and case mix: each client keeps its drug-class mixture but gets a
+    log-uniform number of pairs in `size_range` and, with `high_range`, a Uniform share of Major pairs. Pairs are
+    drawn from the client pool with that mixture (a sample three times larger, so the Major share can be set without
+    repeating pairs where possible)."""
+    rng = np.random.default_rng(seed + 8080)
+    out = []
+    for d in datasets:
+        n = len(d)
+        if size_range:
+            lo, hi = size_range
+            n = int(round(np.exp(rng.uniform(np.log(lo), np.log(hi)))))
+        if high_range is None:
+            edges = sample_observations(pool, atc_mapping, d.class_mixture, n, rng)
+        else:
+            cand = sample_observations(pool, atc_mapping, d.class_mixture, 3 * n, rng)
+            is_high = risk.risk_of(cand) == 2
+            h_idx, o_idx = np.flatnonzero(is_high), np.flatnonzero(~is_high)
+            n_h = int(round(rng.uniform(*high_range) * n))
+            pick = np.concatenate([rng.choice(h_idx, n_h, replace=n_h > h_idx.size),
+                                   rng.choice(o_idx, n - n_h, replace=n - n_h > o_idx.size)])
+            edges = cand[torch.from_numpy(rng.permutation(pick)).long()]
+        out.append(LocalObservationDataset(client_id=d.client_id, edges=edges, class_mixture=d.class_mixture))
+    return out
+
+
+def underreport_events(a: argparse.Namespace, taken: set) -> List[PoisonEvent]:
+    """Under-reporting centres (systemic or honest missingness): each leaves out a share of its Major pairs (scope
+    high) or of all its pairs (scope all) from --underreport-start on, with no change to its update."""
+    if not a.underreport_clients:
+        return []
+    clash = set(a.underreport_clients) & taken
+    if clash:
+        raise SystemExit(f"clients {sorted(clash)} are already attackers")
+    rng = np.random.default_rng(a.seed + 2718)
+    out = []
+    for cid in a.underreport_clients:
+        rho = float(rng.uniform(*a.underreport_rho_range)) if a.underreport_rho_range else a.underreport_rho
+        out.append(PoisonEvent(client_id=cid, start_round=a.underreport_start,
+                               hide_risk=rho if a.underreport_scope == "high" else 0.0,
+                               hide_any=rho if a.underreport_scope == "all" else 0.0))
+    return out
+
+
 def lie_z(n: int, m: int) -> float:
     """Baruch et al. (2019): the largest shift that keeps the attackers inside the honest majority."""
     from scipy.stats import norm
@@ -364,7 +465,16 @@ def main() -> None:
         raise SystemExit("--client-high-weight and --fltrust-high-frac need risk labels (DrugBank)")
     if a.trust_cone_cos is not None and not has_risk:
         raise SystemExit("--trust-cone-cos needs risk labels (DrugBank)")
-    if a.hide_high or a.fabricate_high or a.client_high_weight != 1.0 or a.trust_cone_cos is not None:
+    needs_risk = ((a.underreport_clients and a.underreport_scope == "high") or a.client_high_range is not None
+                  or a.server_corrupt is not None)
+    if needs_risk and not has_risk:
+        raise SystemExit("--underreport-scope high, --client-high-range and --server-corrupt need risk labels")
+    if a.server_corrupt is not None and a.method not in ROOT_METHODS:
+        raise SystemExit("--server-corrupt needs a method that uses server data")
+    if (a.client_size_range or a.client_high_range) and not a.fixed_client_data:
+        raise SystemExit("--client-size-range and --client-high-range need --fixed-client-data")
+    if (a.hide_high or a.fabricate_high or a.client_high_weight != 1.0 or a.trust_cone_cos is not None
+            or needs_risk):
         from src.data.drugbank import edge_risk_lookup
         edge_risk = edge_risk_lookup(os.path.join(a.data, a.db_dir))
     cfg = make_cfg(a, os.path.join(out_dir, "ckpt"))
@@ -379,6 +489,14 @@ def main() -> None:
         n_root = max(50, int(a.root_frac * train_full.size(0)))
         root_edges, client_pool = train_full[perm[:n_root]].clone(), train_full[perm[n_root:]].clone()
         root_risk = split["train"]["risk"][perm[:n_root]].clone() if "risk" in split["train"] else None
+        if a.server_corrupt is not None:
+            # Fake pairs avoid every known interaction, validation and test included.
+            known = build_edge_lookup(torch.cat([train_full, split["valid"]["edge"], split["test"]["edge"]]))
+            root_edges, root_risk, info = corrupt_server_data(
+                root_edges, root_risk, a.server_corrupt, a.server_corrupt_frac, num_nodes, known,
+                np.random.default_rng(a.seed + 5555))
+            with open(os.path.join(out_dir, "server_corruption.json"), "w") as f:
+                json.dump(dict(info, kind=a.server_corrupt, frac=a.server_corrupt_frac), f)
 
     datasets = generate_client_observations(train_edges=client_pool, num_clients=a.num_clients,
                                             atc_mapping=atc_mapping, observations_per_client=a.obs_per_client,
@@ -388,6 +506,20 @@ def main() -> None:
         if a.num_clients != 1:
             raise SystemExit("--all-edges needs --num-clients 1")
         datasets[0].edges = client_pool.clone()
+    if a.partition == "disjoint":
+        if not a.fixed_client_data:
+            raise SystemExit("--partition disjoint needs --fixed-client-data")
+        datasets = disjoint_partition(client_pool, atc_mapping, a.num_clients, 0.5, a.seed)
+        with open(os.path.join(out_dir, "partition.json"), "w") as f:
+            json.dump({"sizes": [len(d) for d in datasets], "pool": int(client_pool.size(0))}, f)
+    if a.client_size_range or a.client_high_range:
+        datasets = heterogeneous_clients(datasets, client_pool, atc_mapping,
+                                         RiskIndex(edge_risk) if a.client_high_range else None,
+                                         a.client_size_range, a.client_high_range, a.seed)
+        with open(os.path.join(out_dir, "clients.json"), "w") as f:
+            hidx = RiskIndex(edge_risk) if edge_risk is not None else None
+            json.dump([{"size": len(d), **({"major_share": round(float((hidx.risk_of(d.edges) == 2).mean()), 4)}
+                                           if hidx is not None else {})} for d in datasets], f)
 
     def trainer_for(cid: int, edges: torch.Tensor):
         return build_client_trainer(cid=cid, graph=graph, node_features=node_features, train_edges=edges,
@@ -395,9 +527,15 @@ def main() -> None:
                                     evaluator=evaluator, cfg=cfg, device=device)
 
     poison_events, drift_events = build_events(a, int(node_features.shape[1]))
+    under_events = underreport_events(a, {e.client_id for e in poison_events})
+    if under_events:
+        with open(os.path.join(out_dir, "underreport.json"), "w") as f:
+            json.dump({str(e.client_id): round(e.hide_risk or e.hide_any, 4) for e in under_events}, f)
     poison_sim = PoisoningSimulator(initial_datasets=datasets, train_edges=train_full, atc_mapping=atc_mapping,
-                                    events=poison_events, observations_per_client=a.obs_per_client,
-                                    seed=a.seed, edge_risk=edge_risk) if poison_events else None
+                                    events=poison_events + under_events, observations_per_client=a.obs_per_client,
+                                    seed=a.seed, edge_risk=edge_risk,
+                                    fixed_base=[d.edges for d in datasets] if a.fixed_client_data else None
+                                    ) if poison_events or under_events else None
     drift_sim = DataDriftSimulator(node_features=node_features, num_clients=a.num_clients, events=drift_events,
                                    seed=a.seed) if drift_events else None
     clients = [FedDDIClient(cid=str(i), trainer=trainer_for(i, datasets[i].edges), local_epochs=a.local_epochs,
@@ -701,6 +839,13 @@ def main() -> None:
             # MDIR while this drops far below 0.95 (see PUBLICATION_PLAN.md, newer-defenses outcome).
             row["test_specificity"] = float((tn.detach().cpu().float() < t).float().mean())
             row.update(safety_fields("val", vp_s, split["valid"]["risk"], t))
+            if a.save_scores and rnd == a.rounds:
+                te = split["test"]["edge"].cpu()
+                atc = atc_mapping.cpu().numpy() if atc_mapping is not None else None
+                np.savez_compressed(os.path.join(out_dir, "scores.npz"), edge=te.numpy(),
+                                    risk=split["test"]["risk"].cpu().numpy(), score=tp.detach().cpu().numpy(),
+                                    neg_score=tn.detach().cpu().numpy(), threshold=t,
+                                    atc=(atc[te.numpy()] if atc is not None else np.zeros_like(te.numpy())))
         reports = [clients[i].evaluate(deployed, {"server_round": rnd})[2] for i in special]
         for key, col in (("drift_region_Hits@20", "drift_region_hits20"),
                          ("non_drift_region_Hits@20", "non_drift_region_hits20"),

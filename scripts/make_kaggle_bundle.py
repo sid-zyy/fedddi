@@ -9,6 +9,8 @@ import os
 os.makedirs('results/kaggle', exist_ok=True)
 files = sorted(set(subprocess.run(['git', 'ls-files'], capture_output=True, text=True).stdout.split())
                | set(subprocess.run(['git', 'ls-files', '--others', '--exclude-standard'], capture_output=True, text=True).stdout.split()))
+# Manuscript folders and archives are not code: keep them out of the Kaggle bundle.
+files = [f for f in files if not f.endswith('.zip') and not f.startswith(('paper/', 'paper_tcbb/'))]
 with zipfile.ZipFile('results/kaggle/fedddi_code.zip', 'w', zipfile.ZIP_DEFLATED) as z:
     for f in files:
         data = open(f, 'rb').read()
@@ -364,21 +366,84 @@ GAPS = [("01_all", "sensitivity, remaining attacks and 80 rounds", "drugbank", "
 DDI_CONF = "fedavg fltrust lfr zeno fedval server_h50 anchor_h25 anchor_h50"
 DDINTER = [("01_confirm", "the confirmation on DDInter's expert severity grades", "drugbank", "random",
             [(DDI_CONF, "clean hideHigh hideHigh4 hide6 lie6 minmax")], "6 to 8")]
-EXTRA = {"10": " --scale full", "F2": " --scale full", "CD": " --scale full", "DI": " --db-dir ddinter_graph"}
+# Revision runs (2026-11-12; criteria in PUBLICATION_PLAN.md, "Revision runs"). R1: the rest of the benchmark, the
+# controls and per-pair scores on DDInter, paired with its table (seeds 62-66, original protocol). R2: on DDInter,
+# fixed client data (no per-round re-sampling, no server pairs in client data; seeds 67-71), the adaptive attacker
+# (72-76) and disjoint clients (77-81). R3: DrugBank cold-drug split at full scale (82-86). R4: the fixed-data check
+# on DrugBank at pilot scale (87-91).
+REV1 = [("01_ddinter_benchmark", "remaining defenses, controls and per-pair scores on DDInter", "drugbank", "random", [
+    ("normclip median trimmed krum cclip dnc flame freqfed", "clean hideHigh4", {"sub": "defenses"}),
+    ("fedavg_root fltrust_rh50 finetune_h50 anchor_post_h50 fltrust_cw3", "clean hideHigh4", {"sub": "controls"}),
+    ("fedavg fltrust anchor_h50", "clean hideHigh4", {"sub": "scores", "extra": " --save-scores"}),
+], "5 to 6")]
+REV2 = [("02_ddinter_checks", "fixed client data, the adaptive attacker and disjoint clients on DDInter", "drugbank",
+         "random", [
+    ("fedavg fltrust server_h50 anchor_h25 anchor_h50", "clean hideHigh4",
+     {"seeds": "67 68 69 70 71", "sub": "fixed_data", "extra": " --fixed-client-data"}),
+    ("fedavg fltrust fedval anchor_h50", "drift cone1 cone5", {"seeds": "72 73 74 75 76", "sub": "adaptive"}),
+    ("server_h50", "drift", {"seeds": "72 73 74 75 76", "sub": "adaptive"}),
+    ("fedavg fltrust server_h50 anchor_h50", "clean hideHigh4",
+     {"seeds": "77 78 79 80 81", "sub": "disjoint", "extra": " --fixed-client-data --partition disjoint"}),
+], "5 to 6")]
+REV3 = [("03_cold_full", "cold-drug split at full scale on DrugBank", "drugbank", "cold", [
+    ("fedavg fltrust server_h50 anchor_h50", "clean hideHigh4", {"extra": " --fixed-client-data"}),
+], "6 to 7")]
+REV4 = [("04_fixed_data_drugbank", "fixed client data on DrugBank at pilot scale", "drugbank", "random", [
+    ("fedavg fltrust server_h50 anchor_h25 anchor_h50", "drift clean hideHigh4", {"extra": " --fixed-client-data"}),
+], "3 to 4")]
+# Revision 2 (2026-11-22; the professor's review, RESPONSE_TO_PROFESSOR.md), all on DDInter, pilot scale, original
+# protocol unless a block says otherwise, fresh seeds per question. R5/R6: imperfect server data (92-96); FLTrust
+# ignores severity labels, so it runs only with corrupted pairs, not corrupted labels. R7: systemic under-reporting
+# (97-101); server-only ignores the clients, so it runs once. R8/R9: attack-strength grid (102-106). R10:
+# heterogeneous centres and honest centres with incomplete records (107-111).
+_SC = lambda ms, ks: " ".join(f"{m}_{k}{p}" for m in ms.split() for k in ks.split() for p in ("05", "10", "20"))  # noqa: E731
+REV5 = [("05_server_labels", "imperfect server data: wrong or missing Major labels, missing Major pairs", "drugbank",
+         "random", [
+    ("fedavg fltrust server_h50 anchor_h50", "clean hideHigh4", {"sub": "reference"}),
+    (_SC("server_h50 anchor_h50", "sn sd") + " " + _SC("fltrust server_h50 anchor_h50", "smh"), "hideHigh4",
+     {"sub": "corrupt"}),
+], "5 to 6")]
+REV6 = [("06_server_pairs", "imperfect server data: missing pairs and false pairs", "drugbank", "random", [
+    (_SC("fltrust server_h50 anchor_h50", "sm sf"), "hideHigh4", {"sub": "corrupt"}),
+], "3 to 4")]
+REV7 = [("07_systemic", "systemic under-reporting: every centre leaves data out", "drugbank", "random", [
+    ("fedavg fltrust anchor_h50", "drift sys2 sys4 sys6 sys8 sysU sysAll4 sysAll8", {}),
+    ("server_h50", "drift", {}),
+], "4 to 5")]
+REV8 = [("08_grid_m12", "attack-strength grid, one and two hiders", "drugbank", "random", [
+    ("fedavg fltrust anchor_h50", "drift hide1r2 hide1r4 hide1r6 hide1r8 hide2r2 hide2r4 hide2r6 hide2r8", {}),
+], "4.5 to 5.5")]
+REV9 = [("09_grid_m46", "attack-strength grid, four and six hiders", "drugbank", "random", [
+    ("fedavg fltrust anchor_h50", "hide4r2 hide4r4 hide4r6 hide4r8 hide6r2 hide6r4 hide6r6 hide6r8", {}),
+], "4 to 5")]
+_HET = " --fixed-client-data --pilot-args=\"--client-size-range 5000 40000 --client-high-range 0.1 0.4\""
+REV10 = [("10_centres", "heterogeneous centres and honest centres with incomplete records", "drugbank", "random", [
+    ("fedavg fltrust server_h50 anchor_h50", "clean hideHigh4", {"sub": "homogeneous", "extra": " --fixed-client-data"}),
+    ("fedavg fltrust server_h50 anchor_h50", "clean hideHigh4", {"sub": "heterogeneous", "extra": _HET}),
+    ("fedavg fltrust anchor_h50", "drift noisyHonest hideHigh4 hideHigh4N", {"sub": "noisy_honest"}),
+    ("server_h50", "drift", {"sub": "noisy_honest"}),
+], "5 to 6")]
+EXTRA = {"10": " --scale full", "F2": " --scale full", "CD": " --scale full", "DI": " --db-dir ddinter_graph",
+         "R1": " --db-dir ddinter_graph", "R2": " --db-dir ddinter_graph", "R3": " --scale full",
+         **{f"R{i}": " --db-dir ddinter_graph" for i in range(5, 11)}}
 SEEDS = {"7": "12 13 14 15 16", "8": "12 13 14 15 16", "9": "10 11", "NM": "10 11", "NC": "17 18 19 20 21",
          "RB": "10 11", "CW": "22 23 24 25 26", "ND": "17 18 19 20 21",
          "AD": "27 28 29 30 31", "S2": "32 33 34 35 36", "GC": "17 18 19 20 21",
          "10": "37 38 39 40 41", "GA": "17 18 19 20 21",
          "GR": "42 43 44 45 46", "F2": "47 48 49 50 51",
          "CD": "37 38 39 40 41", "CO": "12 13 14 15 16",
-         "GP": "52-61", "DI": "62 63 64 65 66"}
+         "GP": "52-61", "DI": "62 63 64 65 66", "R1": "62 63 64 65 66", "R2": "67-81",
+         "R3": "82 83 84 85 86", "R4": "87 88 89 90 91", "R5": "92 93 94 95 96", "R6": "92 93 94 95 96",
+         "R7": "97 98 99 100 101", "R8": "102 103 104 105 106", "R9": "102 103 104 105 106",
+         "R10": "107 108 109 110 111"}
 LABEL = {"7": "step 7", "8": "step 8", "9": "step 9", "NM": "new method", "NC": "new method confirmation",
          "RB": "anchoring baselines", "CW": "client-weighting confirmation",
          "ND": "newer defenses", "AD": "adaptive attack on HARBOR",
          "S2": "small server share confirmation", "GC": "second architecture",
          "10": "step 10 (full scale)", "GA": "second architecture (GAT)", "GR": "GAT replication", "F2": "2% share follow-up (full scale)",
          "CD": "centralized ceiling (DrugBank)", "CO": "centralized ceiling (ogbl-ddi)",
-         "GP": "checks before submission", "DI": "DDInter"}
+         "GP": "checks before submission", "DI": "DDInter", "R1": "revision", "R2": "revision", "R3": "revision",
+         "R4": "revision", **{f"R{i}": "revision 2" for i in range(5, 11)}}
 JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), *m) for m in STEP8]
         + [("9", "s9", len(STEP9), *m) for m in STEP9] + [("NM", "nm", len(NEW), *m) for m in NEW]
         + [("NC", "nc", len(CONFIRM), *m) for m in CONFIRM] + [("RB", "rb", len(BASELINES), *m) for m in BASELINES]
@@ -388,7 +453,11 @@ JOBS = ([("7", "main", len(MAIN), *m) for m in MAIN] + [("8", "s8", len(STEP8), 
         + [("10", "s10", len(FULL), *m) for m in FULL] + [("GA", "ga", len(GAT), *m) for m in GAT]
         + [("GR", "gr", len(GAT2), *m) for m in GAT2] + [("F2", "f2", len(FIX2), *m) for m in FIX2]
         + [("CD", "cd", len(CEIL_DB), *m) for m in CEIL_DB] + [("CO", "co", len(CEIL_OGB), *m) for m in CEIL_OGB]
-        + [("GP", "gp", 1, *m) for m in GAPS] + [("DI", "di", 1, *m) for m in DDINTER])
+        + [("GP", "gp", 1, *m) for m in GAPS] + [("DI", "di", 1, *m) for m in DDINTER]
+        + [("R1", "rv", 4, *m) for m in REV1] + [("R2", "rv", 4, *m) for m in REV2]
+        + [("R3", "rv", 4, *m) for m in REV3] + [("R4", "rv", 4, *m) for m in REV4]
+        + [(f"R{i}", "rv", 10, *m) for i, rev in ((5, REV5), (6, REV6), (7, REV7), (8, REV8), (9, REV9),
+                                                  (10, REV10)) for m in rev])
 for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     out = f"/kaggle/working/results/{prefix}_{key}"
     opt = lambda b: b[2] if len(b) > 2 else {}  # noqa: E731
@@ -426,7 +495,35 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                          "go to one subfolder per check. ",
                    "DI": "DDInter (expert severity grades; Major = high-risk) on fresh seeds 62 to 66, step 7 settings, "
                          "HARBOR not re-tuned. Also needs `ddinter_ddi.pt` (built with scripts/prepare_ddinter.py) in your "
-                         "private dataset. "}[step] + f"{n_runs} runs, about "
+                         "private dataset. ",
+                   "R1": "DDInter on seeds 62 to 66, paired with the DDInter confirmation, its protocol unchanged: the "
+                         "eight defenses not yet run there, the controls that use the server's data differently, and "
+                         "the last round's per-pair test scores for the drug-class analysis. Also needs `ddinter_ddi.pt`. ",
+                   "R2": "DDInter, three checks on their own fresh seeds: clients keep fixed data under hiding, as they "
+                         "do with no attack (67 to 71); the adaptive attacker built against HARBOR (72 to 76); clients "
+                         "that share no pairs (77 to 81). Also needs `ddinter_ddi.pt`. ",
+                   "R3": "DrugBank cold-drug split (test drugs unseen in training) at full scale, fresh seeds 82 to 86, "
+                         "clients keep fixed data. ",
+                   "R4": "DrugBank at pilot scale, fresh seeds 87 to 91: the main comparison with clients keeping "
+                         "fixed data under hiding, as they do with no attack. ",
+                   "R5": "DDInter, fresh seeds 92 to 96, four hiders: 5, 10 and 20% of the server's Major labels "
+                         "wrong (sn), true Major pairs labelled moderate (sd), or Major pairs missing (smh); "
+                         "evaluation labels stay clean. The reference block has the uncorrupted server. Also needs "
+                         "`ddinter_ddi.pt`. ",
+                   "R6": "DDInter, seeds 92 to 96 (paired with the previous notebook's reference), four hiders: 5, 10 "
+                         "and 20% of the server's pairs missing (sm) or replaced by false pairs (sf). Also needs "
+                         "`ddinter_ddi.pt`. ",
+                   "R7": "DDInter, fresh seeds 97 to 101: all ten centres leave out 20 to 80% of their Major pairs "
+                         "from round 1 (sys2 to sys8), a share drawn per centre from 20 to 80% (sysU), or 40 or 80% of "
+                         "pairs of any severity (sysAll4, sysAll8). Also needs `ddinter_ddi.pt`. ",
+                   "R8": "DDInter, fresh seeds 102 to 106: one or two hiders leaving out 20 to 80% of their Major "
+                         "pairs. Also needs `ddinter_ddi.pt`. ",
+                   "R9": "DDInter, seeds 102 to 106 (the grid's other half): four or six hiders leaving out 20 to 80% "
+                         "of their Major pairs. Also needs `ddinter_ddi.pt`. ",
+                   "R10": "DDInter, fresh seeds 107 to 111: centres of different sizes (5,000 to 40,000 pairs) and "
+                          "Major shares (10 to 40%), against the same seeds with equal centres; and honest centres "
+                          "missing 10 to 30% of their records at random, with and without four hiders. Also needs "
+                          "`ddinter_ddi.pt`. "}[step] + f"{n_runs} runs, about "
                 f"{hours} hours. If a session is cut off, see step 3 to resume without repeating finished runs."),
              md("## 1. Copy the code" + (" and the DrugBank file" if db else "")), COPY]
     version = ("grep -q model_attack scripts/cpu_pilot.py" if step == "7"
@@ -439,9 +536,12 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
                else "grep -q all-edges scripts/cpu_pilot.py" if step in ("CD", "CO")
                else "grep -q anchor_h50_k2 scripts/gpu_variant_study.py" if step == "GP"
                else "grep -q db-dir scripts/cpu_pilot.py" if step == "DI"
+               else "grep -q fixed-client-data scripts/cpu_pilot.py" if step in ("R1", "R2", "R3", "R4")
+               else "grep -q server-corrupt scripts/cpu_pilot.py" if step.startswith("R")
                else "grep -q '\"server_h50\"' scripts/gpu_variant_study.py")
     if db:
-        cells += [COPY_DB, *([COPY_DD] if step == "DI" else []), CHECK_RISK, md("## 2. Install packages and check the code version"),
+        cells += [COPY_DB, *([COPY_DD] if step in ("DI", "R1", "R2") or "ddinter" in EXTRA.get(step, "") else []),
+                  CHECK_RISK, md("## 2. Install packages and check the code version"),
                   bash(PIP, "cd /kaggle/working/fedddi", f"{version} || "
                        "{ echo 'old fedddi_code.zip: upload the latest one'; exit 1; }")]
     else:
@@ -467,9 +567,13 @@ for step, prefix, total, key, title, dataset, split, blocks, hours in JOBS:
     cells += [md("## 5. Summary table"),
               *[code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}/{sub}") for sub in subs],
               *([] if subs else [code(f"!cd /kaggle/working/fedddi && python scripts/summarize_variants.py {out}")]),
+              *([code(f"!cd /kaggle/working/fedddi && python scripts/missed_by_class.py {out}/scores")]
+                if step == "R1" else []),
               md("## 6. Package results"), PACK]
     name = {"7": "main", "NM": "newmethod", "NC": "confirm_anchor", "RB": "anchor_baselines", "CW": "confirm_cw", "ND": "newdefenses", "AD": "adaptive_harbor", "S2": "share2",
-            "GC": "gcn", "10": "step10", "GA": "gat", "GR": "gat", "F2": "step10_fix", "CD": "ceiling", "CO": "ceiling", "GP": "gaps", "DI": "ddinter"}.get(step, "step" + step)
+            "GC": "gcn", "10": "step10", "GA": "gat", "GR": "gat", "F2": "step10_fix", "CD": "ceiling", "CO": "ceiling", "GP": "gaps", "DI": "ddinter",
+            "R1": "revision", "R2": "revision", "R3": "revision", "R4": "revision",
+            **{f"R{i}": "revision2" for i in range(5, 11)}}.get(step, "step" + step)
     nbs[f"fedddi_{name}_{key}.ipynb"] = cells
 
 for name, cells in nbs.items():
